@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>删除功能测试</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        h2 { color: #0078d4; font-size: 18px; }
+        button {
+            background: #0078d4;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #005a9e; }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .log {
+            background: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 10px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid #0078d4;
+            padding-left: 10px;
+        }
+        .log-entry.success { border-left-color: #28a745; }
+        .log-entry.error { border-left-color: #dc3545; }
+        .log-entry.info { border-left-color: #17a2b8; }
+        .status {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .status.pending { background: #fff3cd; color: #856404; }
+    </style>
+</head>
+<body>
+    <h1>🔧 删除功能修复验证</h1>
+
+    <div class="test-card">
+        <h2>📊 系统状态</h2>
+        <p>后端 API: <span id="apiStatus" class="status pending">检查中...</span></p>
+        <p>数据库项目数: <span id="itemCount">-</span></p>
+        <button onclick="checkStatus()">刷新状态</button>
+    </div>
+
+    <div class="test-card">
+        <h2>🧪 快速测试</h2>
+        <p>此测试将创建一个包含 20 个子项的测试文件夹，然后删除它。</p>
+        <button onclick="runQuickTest()" id="quickTestBtn">运行快速测试</button>
+        <button onclick="clearLog()">清空日志</button>
+    </div>
+
+    <div class="test-card">
+        <h2>🔥 压力测试</h2>
+        <p>创建包含 100 个子项的文件夹并删除（测试性能和稳定性）</p>
+        <button onclick="runStressTest()" id="stressTestBtn">运行压力测试</button>
+    </div>
+
+    <div class="test-card">
+        <h2>📝 测试日志</h2>
+        <div id="testLog" class="log">
+            <div class="log-entry info">等待测试开始...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_ROOT = 'http://127.0.0.1:5000/api';
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('testLog');
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${timestamp}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('testLog').innerHTML = '<div class="log-entry info">日志已清空</div>';
+        }
+
+        async function checkStatus() {
+            try {
+                const response = await fetch(`${API_ROOT}/items`);
+                if (response.ok) {
+                    const items = await response.json();
+                    document.getElementById('apiStatus').className = 'status success';
+                    document.getElementById('apiStatus').textContent = '✓ 连接成功';
+                    document.getElementById('itemCount').textContent = items.length;
+                    log('系统状态正常', 'success');
+                } else {
+                    throw new Error('API 响应错误');
+                }
+            } catch (error) {
+                document.getElementById('apiStatus').className = 'status error';
+                document.getElementById('apiStatus').textContent = '✗ 连接失败';
+                document.getElementById('itemCount').textContent = '无法获取';
+                log('系统状态检查失败: ' + error.message, 'error');
+            }
+        }
+
+        async function createItem(name, type, parentId = null) {
+            const response = await fetch(`${API_ROOT}/items`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name,
+                    type,
+                    description: `测试${type}`,
+                    location: `C:\\Test\\${name}`,
+                    parent_id: parentId
+                })
+            });
+            if (!response.ok) throw new Error('创建失败');
+            return await response.json();
+        }
+
+        async function deleteItem(itemId) {
+            const response = await fetch(`${API_ROOT}/items/${itemId}`, {
+                method: 'DELETE'
+            });
+            if (!response.ok) throw new Error('删除失败');
+            return await response.json();
+        }
+
+        async function runQuickTest() {
+            const btn = document.getElementById('quickTestBtn');
+            btn.disabled = true;
+            clearLog();
+
+            try {
+                log('开始快速测试...', 'info');
+                
+                // 创建根文件夹
+                log('创建测试文件夹...', 'info');
+                const root = await createItem('快速测试文件夹', 'folder');
+                const rootId = root.id;
+                log(`✓ 创建根文件夹 (ID: ${rootId})`, 'success');
+
+                // 创建 20 个子项
+                log('创建 20 个子项...', 'info');
+                for (let i = 1; i <= 20; i++) {
+                    const type = i % 3 === 0 ? 'folder' : 'file';
+                    await createItem(`子项${i}`, type, rootId);
+                    if (i % 5 === 0) {
+                        log(`已创建 ${i}/20 个子项`, 'info');
+                    }
+                }
+                log('✓ 20 个子项创建完成', 'success');
+
+                // 等待 1 秒
+                log('等待 1 秒...', 'info');
+                await new Promise(r => setTimeout(r, 1000));
+
+                // 删除根文件夹
+                log(`准备删除根文件夹及所有子项 (ID: ${rootId})...`, 'info');
+                const startTime = Date.now();
+                const result = await deleteItem(rootId);
+                const endTime = Date.now();
+                const duration = endTime - startTime;
+
+                log(`✓ 删除成功！`, 'success');
+                log(`  - 删除项目数: ${result.deleted_count || 21}`, 'success');
+                log(`  - 耗时: ${duration}ms`, 'success');
+
+                // 验证删除
+                log('验证删除结果...', 'info');
+                const items = await (await fetch(`${API_ROOT}/items`)).json();
+                const remaining = items.filter(item => 
+                    item.id === rootId || item.parent_id === rootId
+                );
+                
+                if (remaining.length === 0) {
+                    log('✓ 验证通过：所有项目已删除', 'success');
+                } else {
+                    log(`✗ 验证失败：仍有 ${remaining.length} 个项目残留`, 'error');
+                }
+
+                log('========== 快速测试完成 ==========', 'success');
+                await checkStatus();
+
+            } catch (error) {
+                log(`✗ 测试失败: ${error.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function runStressTest() {
+            const btn = document.getElementById('stressTestBtn');
+            btn.disabled = true;
+            clearLog();
+
+            try {
+                log('开始压力测试（100 项）...', 'info');
+                
+                // 创建根文件夹
+                log('创建测试文件夹...', 'info');
+                const root = await createItem('压力测试文件夹', 'folder');
+                const rootId = root.id;
+                log(`✓ 创建根文件夹 (ID: ${rootId})`, 'success');
+
+                // 创建 3 层嵌套结构
+                log('创建多层嵌套结构...', 'info');
+                let totalCreated = 1;
+
+                // 第一层：10 个文件夹
+                for (let i = 1; i <= 10; i++) {
+                    const folder1 = await createItem(`文件夹L1_${i}`, 'folder', rootId);
+                    totalCreated++;
+
+                    // 第二层：每个文件夹 3 个子项
+                    for (let j = 1; j <= 3; j++) {
+                        const folder2 = await createItem(`文件夹L2_${i}_${j}`, 'folder', folder1.id);
+                        totalCreated++;
+
+                        // 第三层：每个文件夹 3 个文件
+                        for (let k = 1; k <= 3; k++) {
+                            await createItem(`文件L3_${i}_${j}_${k}.txt`, 'file', folder2.id);
+                            totalCreated++;
+                        }
+                    }
+
+                    if (i % 3 === 0) {
+                        log(`已创建 ${totalCreated} 个项目...`, 'info');
+                    }
+                }
+                
+                log(`✓ 共创建 ${totalCreated} 个项目`, 'success');
+
+                // 等待 2 秒
+                log('等待 2 秒...', 'info');
+                await new Promise(r => setTimeout(r, 2000));
+
+                // 删除根文件夹
+                log(`准备删除根文件夹及所有子项 (总计 ${totalCreated} 项)...`, 'info');
+                const startTime = Date.now();
+                const result = await deleteItem(rootId);
+                const endTime = Date.now();
+                const duration = endTime - startTime;
+
+                log(`✓ 删除成功！`, 'success');
+                log(`  - 删除项目数: ${result.deleted_count || totalCreated}`, 'success');
+                log(`  - 耗时: ${duration}ms`, 'success');
+                log(`  - 性能: ${(result.deleted_count / (duration / 1000)).toFixed(2)} 项/秒`, 'info');
+
+                // 验证删除
+                log('验证删除结果...', 'info');
+                await new Promise(r => setTimeout(r, 500));
+                const items = await (await fetch(`${API_ROOT}/items`)).json();
+                const remaining = items.filter(item => {
+                    // 检查是否是被删除项的后代
+                    let current = item;
+                    while (current) {
+                        if (current.id === rootId) return true;
+                        current = items.find(i => i.id === current.parent_id);
+                    }
+                    return false;
+                });
+                
+                if (remaining.length === 0) {
+                    log('✓ 验证通过：所有项目已完全删除', 'success');
+                } else {
+                    log(`✗ 验证失败：仍有 ${remaining.length} 个项目残留`, 'error');
+                }
+
+                log('========== 压力测试完成 ==========', 'success');
+                await checkStatus();
+
+            } catch (error) {
+                log(`✗ 测试失败: ${error.message}`, 'error');
+                console.error(error);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        // 页面加载时检查状态
+        window.addEventListener('DOMContentLoaded', checkStatus);
+    </script>
+</body>
+</html>

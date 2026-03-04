@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>硬盘文件管理器</title>
+
+  <!-- Bootstrap 5 CDN -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="css/style.css" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+</head>
+<body>
+  <!-- 顶部工具栏 -->
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <button class="btn-icon" id="backBtn" title="后退" disabled>
+        <i class="fas fa-arrow-left"></i>
+      </button>
+      <button class="btn-icon" id="forwardBtn" title="前进" disabled>
+        <i class="fas fa-arrow-right"></i>
+      </button>
+      <button class="btn-icon" id="upBtn" title="上一级" disabled>
+        <i class="fas fa-arrow-up"></i>
+      </button>
+      <button class="btn-icon" id="refreshBtn" title="刷新">
+        <i class="fas fa-sync-alt"></i>
+      </button>
+    </div>
+
+    <div class="toolbar-center">
+      <!-- 地址栏/面包屑导航 -->
+      <div class="address-bar">
+        <i class="fas fa-folder text-warning me-2"></i>
+        <div id="breadcrumb" class="breadcrumb-path">
+          <span class="breadcrumb-item active">此电脑</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="toolbar-right">
+      <div class="search-box">
+        <i class="fas fa-search"></i>
+        <input type="text" id="searchInput" placeholder="搜索硬盘文件..." />
+      </div>
+      <button class="btn-icon" id="viewGridBtn" title="网格视图">
+        <i class="fas fa-th"></i>
+      </button>
+      <button class="btn-icon active" id="viewListBtn" title="列表视图">
+        <i class="fas fa-list"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- 主要内容区 -->
+  <div class="main-container">
+    <!-- 左侧边栏 - 文件夹树 -->
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <i class="fas fa-hard-drive text-primary"></i>
+        <span>韦仰的硬盘管理</span>
+      </div>
+      <div class="sidebar-scroll">
+      <div class="sidebar-section">
+        <div class="section-title">
+          <i class="fas fa-folder text-warning"></i>
+          <span>文件夹</span>
+        </div>
+        <div id="folderTree" class="folder-tree">
+          <!-- 动态生成树状结构 -->
+        </div>
+      </div>
+      <div class="sidebar-section mt-3">
+        <div class="section-title">
+          <i class="fas fa-chart-pie text-info"></i>
+          <span>统计信息</span>
+        </div>
+        <div id="statsPanel" class="stats-panel">
+          <div class="stat-row">
+            <div class="stat-card">
+              <div class="stat-icon"><i class="fas fa-file text-primary"></i></div>
+              <div class="stat-info">
+                <span class="stat-number" id="totalFiles">0</span>
+                <span class="stat-desc">文件</span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon"><i class="fas fa-folder text-warning"></i></div>
+              <div class="stat-info">
+                <span class="stat-number" id="totalFolders">0</span>
+                <span class="stat-desc">文件夹</span>
+              </div>
+            </div>
+          </div>
+          <div class="stat-storage">
+            <div class="stat-storage-header">
+              <i class="fas fa-database"></i>
+              <span>存储概览</span>
+            </div>
+            <div class="stat-storage-size" id="totalSizeDisplay">0 B</div>
+            <div class="stat-storage-count" id="sizedFileCount">已记录 0 个文件大小</div>
+            <div id="sizeByFormat" class="size-by-format"></div>
+          </div>
+          <div class="stat-formats">
+            <div class="stat-formats-title">格式分布</div>
+            <div id="formatStats" class="format-stats"></div>
+          </div>
+        </div>
+      </div>
+      </div><!-- end sidebar-scroll -->
+    </div>
+
+    <!-- 侧边栏拖拽调整手柄 -->
+    <div class="sidebar-resize-handle" id="sidebarResizeHandle" title="拖拽调整侧边栏宽度"></div>
+
+    <!-- 中间内容区 - 文件列表 -->
+    <div class="content-area">
+      <!-- 操作栏 -->
+      <div class="action-bar">
+        <div class="action-left">
+          <button class="btn-action btn-primary" id="newFolderBtn">
+            <i class="fas fa-folder-plus"></i>
+            <span>新建文件夹</span>
+          </button>
+          <button class="btn-action btn-primary" id="newFileBtn">
+            <i class="fas fa-file-plus"></i>
+            <span>新建文件</span>
+          </button>
+          <button class="btn-action btn-secondary" id="localImportBtn">
+            <i class="fas fa-folder-open"></i>
+            <span>批量导入</span>
+          </button>
+          <button class="btn-action btn-danger" id="deleteBtn" disabled>
+            <i class="fas fa-trash"></i>
+            <span>删除</span>
+          </button>
+        </div>
+        <div class="action-right">
+          <div class="dropdown">
+            <button class="btn-action btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+              <i class="fas fa-download"></i>
+              <span>导出</span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              <li><h6 class="dropdown-header"><i class="fas fa-globe"></i> 导出全部</h6></li>
+              <li><a class="dropdown-item export-option" href="#" data-scope="all" data-format="json"><i class="fas fa-file-code"></i> 全部 → JSON</a></li>
+              <li><a class="dropdown-item export-option" href="#" data-scope="all" data-format="csv"><i class="fas fa-file-csv"></i> 全部 → CSV</a></li>
+              <li><hr class="dropdown-divider"></li>
+              <li><h6 class="dropdown-header"><i class="fas fa-folder-open"></i> 导出当前文件夹</h6></li>
+              <li><a class="dropdown-item export-option" href="#" data-scope="folder" data-format="json"><i class="fas fa-file-code"></i> 当前文件夹 → JSON</a></li>
+              <li><a class="dropdown-item export-option" href="#" data-scope="folder" data-format="csv"><i class="fas fa-file-csv"></i> 当前文件夹 → CSV</a></li>
+              <li><hr class="dropdown-divider"></li>
+              <li><h6 class="dropdown-header"><i class="fas fa-check-double"></i> 自选导出</h6></li>
+              <li><a class="dropdown-item" href="#" id="exportPickJson" data-format="json"><i class="fas fa-file-code"></i> 自选项目 → JSON</a></li>
+              <li><a class="dropdown-item" href="#" id="exportPickCsv" data-format="csv"><i class="fas fa-file-csv"></i> 自选项目 → CSV</a></li>
+            </ul>
+          </div>
+          <button class="btn-action btn-secondary" id="importBtn">
+            <i class="fas fa-upload"></i>
+            <span>导入</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 列表头部 -->
+      <div class="list-header" id="listHeader">
+        <div class="list-col col-name" onclick="handleSortClick('name')">
+          <i class="fas fa-sort sort-icon"></i> 名称
+        </div>
+        <div class="list-col col-type" onclick="handleSortClick('type')">
+          <i class="fas fa-sort sort-icon"></i> 类型
+        </div>
+        <div class="list-col col-format" onclick="handleSortClick('format')">
+          <i class="fas fa-sort sort-icon"></i> 格式
+        </div>
+        <div class="list-col col-size" onclick="handleSortClick('file_size')">
+          <i class="fas fa-sort sort-icon"></i> 大小
+        </div>
+        <div class="list-col col-location" onclick="handleSortClick('location')">
+          <i class="fas fa-sort sort-icon"></i> 位置
+        </div>
+        <div class="list-col col-description" onclick="handleSortClick('description')">
+          <i class="fas fa-sort sort-icon"></i> 描述
+        </div>
+      </div>
+
+      <!-- 文件列表容器 -->
+      <div class="file-list" id="fileList">
+        <!-- 动态生成 -->
+      </div>
+
+      <!-- 网格视图容器 -->
+      <div class="file-grid" id="fileGrid" style="display:none;">
+        <!-- 动态生成 -->
+      </div>
+
+      <!-- 空状态 -->
+      <div class="empty-state" id="emptyState" style="display:none;">
+        <i class="fas fa-folder-open"></i>
+        <p>此文件夹为空</p>
+        <button class="btn-action btn-primary" id="emptyNewBtn">
+          <i class="fas fa-plus"></i>
+          <span>新建项目</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 右侧详情面板 -->
+    <div class="details-panel" id="detailsPanel">
+      <div class="details-header">
+        <span>详细信息</span>
+        <button class="btn-icon" id="closePanelBtn">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="details-content" id="detailsContent">
+        <div class="no-selection">
+          <i class="fas fa-mouse-pointer"></i>
+          <p>选择一个项目以查看详情</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新建/编辑 模态框 -->
+  <div class="modal fade" id="itemModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <form id="itemForm">
+          <div class="modal-header">
+            <h5 class="modal-title" id="modalTitle">
+              <i class="fas fa-folder-plus"></i>
+              <span id="modalTitleText">新建文件夹</span>
+            </h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="itemId" />
+            <input type="hidden" id="itemType" value="folder" />
+            
+            <div class="mb-3">
+              <label class="form-label">
+                <i class="fas fa-signature"></i>
+                名称 <span class="text-danger">*</span>
+              </label>
+              <input type="text" class="form-control" id="itemName" required placeholder="输入名称" />
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">
+                <i class="fas fa-align-left"></i>
+                描述
+              </label>
+              <textarea class="form-control" id="itemDesc" placeholder="输入描述信息（可选）"></textarea>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">
+                <i class="fas fa-map-marker-alt"></i>
+                物理位置
+              </label>
+              <input type="text" class="form-control" id="itemLocation" placeholder="例如: D:\Movies 或 E:\Documents\Report.pdf" />
+              <small class="text-muted">输入文件或文件夹在硬盘中的实际路径</small>
+            </div>
+
+            <div class="mb-3" id="formatGroup" style="display:none;">
+              <label class="form-label">
+                <i class="fas fa-file-alt"></i>
+                文件格式
+              </label>
+              <input type="text" class="form-control" id="itemFormat" placeholder="例如: mp4, pdf, docx" />
+              <small class="text-muted">输入文件扩展名（不含点号）</small>
+            </div>
+
+            <div class="mb-3" id="sizeGroup" style="display:none;">
+              <label class="form-label">
+                <i class="fas fa-weight-hanging"></i>
+                文件大小
+              </label>
+              <input type="text" class="form-control" id="itemFileSize" placeholder="例如: 1.5GB, 700MB, 4096" />
+              <small class="text-muted">输入文件大小（支持 B/KB/MB/GB/TB 单位）</small>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">
+                <i class="fas fa-folder-tree"></i>
+                父文件夹
+              </label>
+              <select class="form-select" id="parentSelect">
+                <option value="">根目录</option>
+              </select>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+              <i class="fas fa-times"></i> 取消
+            </button>
+            <button type="submit" class="btn btn-primary">
+              <i class="fas fa-save"></i> 保存
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- 本地批量导入模态框 -->
+  <div class="modal fade" id="localImportModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">
+            <i class="fas fa-folder-open"></i>
+            批量导入本地资源
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" id="localImportCloseBtn"></button>
+        </div>
+        <div class="modal-body">
+          <div id="localImportStageSelect">
+            <p class="text-muted small mb-3">选择本地文件夹或文件，系统将读取其中的文件夹与文件并导入到当前目录，仅读取元数据不会修改本地磁盘内容。</p>
+            <div class="row g-3">
+              <div class="col-lg-6">
+                <div class="border rounded p-3 h-100">
+                  <h6 class="mb-2"><i class="fas fa-folder"></i> 已选文件夹</h6>
+                  <div class="fs-5 fw-semibold" id="localImportFolderCount">0</div>
+                  <div class="text-muted small mt-2">包含的子文件夹与文件会一并导入。</div>
+                </div>
+              </div>
+              <div class="col-lg-6">
+                <div class="border rounded p-3 h-100">
+                  <h6 class="mb-2"><i class="fas fa-file"></i> 已选文件</h6>
+                  <div class="fs-5 fw-semibold" id="localImportFileCount">0</div>
+                  <div class="text-muted small mt-2">选中的文件将直接导入到当前目录。</div>
+                </div>
+              </div>
+            </div>
+            <div class="mt-3">
+              <label class="form-label">
+                <i class="fas fa-road"></i>
+                根目录物理路径（可选）
+              </label>
+              <input type="text" class="form-control" id="localImportBasePath" placeholder="例如: D:\\Media">
+              <small class="text-muted">用于生成物理路径；留空时将使用相对路径或自动推断的路径。</small>
+            </div>
+          </div>
+
+          <div id="localImportStageProgress" style="display:none;">
+            <div class="progress" style="height: 20px;">
+              <div class="progress-bar" id="localImportProgressBar" role="progressbar" style="width:0%;">0%</div>
+            </div>
+            <div class="mt-3">
+              <p class="mb-1" id="localImportStatusText">正在准备导入...</p>
+              <p class="text-muted small" id="localImportDetailText"></p>
+            </div>
+          </div>
+
+          <div id="localImportStageComplete" style="display:none;">
+            <div class="alert alert-success d-flex align-items-center" role="alert">
+              <i class="fas fa-check-circle me-2"></i>
+              <div>导入完成，所有项目已处理。</div>
+            </div>
+            <div id="localImportSummaryText" class="small"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <div id="localImportSelectionActions" class="d-flex flex-wrap gap-2">
+            <button type="button" class="btn btn-outline-secondary" id="localImportAddFolderBtn">
+              <i class="fas fa-folder-plus"></i>
+              选择文件夹
+            </button>
+            <button type="button" class="btn btn-outline-secondary" id="localImportAddFileBtn">
+              <i class="fas fa-file-import"></i>
+              选择文件
+            </button>
+            <button type="button" class="btn btn-outline-danger" id="localImportResetBtn">
+              <i class="fas fa-undo"></i>
+              重置
+            </button>
+            <button type="button" class="btn btn-primary" id="localImportStartBtn">
+              <i class="fas fa-play"></i>
+              开始导入
+            </button>
+          </div>
+          <button type="button" class="btn btn-primary" id="localImportConfirmBtn" data-bs-dismiss="modal" style="display:none;">
+            <i class="fas fa-check"></i>
+            确定
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="localDirectoryInput" webkitdirectory multiple style="display:none;" />
+  <input type="file" id="localFileInput" multiple style="display:none;" />
+
+  <!-- 导入模态框 -->
+  <div class="modal fade" id="importModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">
+            <i class="fas fa-upload"></i>
+            导入数据
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">选择 JSON 文件</label>
+            <input type="file" class="form-control" id="importFile" accept=".json" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="button" class="btn btn-primary" id="confirmImportBtn">
+            <i class="fas fa-check"></i> 导入
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导出自选模态框 -->
+  <div class="modal fade" id="exportPickModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">
+            <i class="fas fa-check-double me-2"></i>选择要导出的项目
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-0">
+          <div class="export-pick-toolbar">
+            <div class="export-pick-search">
+              <i class="fas fa-search"></i>
+              <input type="text" id="exportPickSearch" placeholder="搜索项目..." />
+            </div>
+            <div class="export-pick-actions">
+              <button type="button" class="btn btn-sm btn-outline-primary" id="exportPickSelectAll">
+                <i class="fas fa-check-double"></i> 全选
+              </button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="exportPickDeselectAll">
+                <i class="fas fa-square"></i> 全不选
+              </button>
+            </div>
+            <div class="export-pick-count">
+              已选 <strong id="exportPickCount">0</strong> 项
+            </div>
+          </div>
+          <div id="exportPickTree" class="export-pick-tree">
+            <!-- 动态生成 -->
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+            <i class="fas fa-times"></i> 取消
+          </button>
+          <button type="button" class="btn btn-primary" id="exportPickConfirmBtn" disabled>
+            <i class="fas fa-download"></i> 导出
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast 容器 -->
+  <div id="toastContainer" class="toast-container position-fixed bottom-0 end-0 p-3"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="js/script.js"></script>
+</body>
+</html>
