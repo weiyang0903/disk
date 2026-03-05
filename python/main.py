@@ -386,11 +386,14 @@ def search_items():
                         OR format LIKE ? ESCAPE '\\'
                         OR location LIKE ? ESCAPE '\\'
                      ORDER BY
-                       CASE WHEN name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END ASC,
                        CASE WHEN type='folder' THEN 0 ELSE 1 END ASC,
+                       CASE WHEN name = ?                    THEN 0
+                            WHEN name LIKE ? ESCAPE '\\' THEN 1
+                            ELSE 2 END ASC,
                        name ASC
                      LIMIT ? OFFSET ?''',
-                  (like_pattern, like_pattern, like_pattern, like_pattern, like_pattern, limit, offset))
+                  (like_pattern, like_pattern, like_pattern, like_pattern,
+                   query, like_pattern, limit, offset))
         rows = c.fetchall()
         results = [
             {"id": r[0], "name": r[1], "description": r[2],
