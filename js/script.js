@@ -1131,14 +1131,14 @@ function restoreSelectionAfterRender() {
   if (deleteBtn) deleteBtn.disabled = false;
 }
 
-function displayListView(items) {
+function displayListView(items, presorted = false) {
   const container = document.getElementById('fileList');
   const gridContainer = document.getElementById('fileGrid');
   container.style.display = 'block';
   gridContainer.style.display = 'none';
   
   const fragment = document.createDocumentFragment();
-  const allSortedItems = sortItems(items);
+  const allSortedItems = presorted ? items : sortItems(items);
   
   allSortedItems.forEach((item, index) => {
     const itemDiv = document.createElement('div');
@@ -1183,14 +1183,14 @@ function displayListView(items) {
   container.appendChild(fragment);
 }
 
-function displayGridView(items) {
+function displayGridView(items, presorted = false) {
   const container = document.getElementById('fileGrid');
   const listContainer = document.getElementById('fileList');
   container.style.display = 'grid';
   listContainer.style.display = 'none';
   
   const fragment = document.createDocumentFragment();
-  const allSortedItems = sortItems(items);
+  const allSortedItems = presorted ? items : sortItems(items);
   
   allSortedItems.forEach((item, index) => {
     const itemDiv = document.createElement('div');
@@ -1432,11 +1432,11 @@ function triggerSearch(rawValue, immediate = false) {
       const results = Array.isArray(data) ? data : (data.items || []);
 
       if (viewMode === 'list') {
-        displayListView(results);
+        displayListView(results, true);
         const listHeader = document.getElementById('listHeader');
         if (listHeader) listHeader.style.display = results.length === 0 ? 'none' : 'flex';
       } else {
-        displayGridView(results);
+        displayGridView(results, true);
         const listHeader = document.getElementById('listHeader');
         if (listHeader) listHeader.style.display = 'none';
       }

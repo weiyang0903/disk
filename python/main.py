@@ -364,20 +364,24 @@ def search_items():
         # 转义 LIKE 通配符
         escaped_query = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         like_pattern = f'%{escaped_query}%'
-        c.execute('''SELECT id, name, description, location, format, type, parent_id, file_size FROM items
+        c.execute('''SELECT id, name, description, location, format, type, parent_id, file_size
+                     FROM items
                      WHERE name LIKE ? ESCAPE '\\'
                         OR description LIKE ? ESCAPE '\\'
                         OR format LIKE ? ESCAPE '\\'
-                        OR location LIKE ? ESCAPE '\\' ''',
-                  (like_pattern, like_pattern, like_pattern, like_pattern))
+                        OR location LIKE ? ESCAPE '\\'
+                     ORDER BY
+                       CASE WHEN name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END ASC,
+                       CASE WHEN type='folder' THEN 0 ELSE 1 END ASC,
+                       name ASC''',
+                  (like_pattern, like_pattern, like_pattern, like_pattern, like_pattern))
         rows = c.fetchall()
-        results = []
-        for row in rows:
-            results.append({
-                "id": row[0], "name": row[1], "description": row[2],
-                "location": row[3], "format": row[4], "type": row[5],
-                "parent_id": row[6], "file_size": row[7]
-            })
+        results = [
+            {"id": r[0], "name": r[1], "description": r[2],
+             "location": r[3], "format": r[4], "type": r[5],
+             "parent_id": r[6], "file_size": r[7]}
+            for r in rows
+        ]
         return jsonify(results)
     except Exception as e:
         print(f"搜索错误: {e}")
