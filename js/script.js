@@ -22,6 +22,11 @@ const PAGE_LIMIT = 200;
 let currentViewPage        = 1;
 let currentViewTotal       = 0;
 let currentViewTotalPages  = 1;
+// 搜索分页状态
+let isSearchActive          = false;
+let currentSearchQuery      = '';
+let currentSearchPage       = 1;
+let currentSearchTotalPages = 1;
 let localImportState = {
   directoryFiles: [],
   looseFiles: [],
@@ -1031,7 +1036,7 @@ function displayCurrentFolder() {
 // ===================================
 // 分页条渲染
 // ===================================
-function renderPaginationBar(page, totalPages, total) {
+function renderPaginationBar(page, totalPages, total, gotoFn = 'gotoViewPage') {
   let bar = document.getElementById('paginationBar');
   if (!bar) {
     // 嵌入到 content-area
@@ -1052,9 +1057,9 @@ function renderPaginationBar(page, totalPages, total) {
   let html = `<span class="pg-info">共 ${total} 项 &nbsp;&bull;&nbsp; 第 ${page}/${totalPages} 页</span>
     <div class="pg-controls">`;
 
-  html += `<button class="pg-btn" ${page <= 1 ? 'disabled' : ''} onclick="gotoViewPage(1)">
+  html += `<button class="pg-btn" ${page <= 1 ? 'disabled' : ''} onclick="${gotoFn}(1)">
     <i class="fas fa-angle-double-left"></i></button>`;
-  html += `<button class="pg-btn" ${page <= 1 ? 'disabled' : ''} onclick="gotoViewPage(${page - 1})">
+  html += `<button class="pg-btn" ${page <= 1 ? 'disabled' : ''} onclick="${gotoFn}(${page - 1})">
     <i class="fas fa-angle-left"></i></button>`;
 
   // 页码按钮（当前页前后各 2 页）
@@ -1062,13 +1067,13 @@ function renderPaginationBar(page, totalPages, total) {
   const end   = Math.min(totalPages, page + 2);
   if (start > 1) html += `<span class="pg-ellipsis">…</span>`;
   for (let i = start; i <= end; i++) {
-    html += `<button class="pg-btn ${i === page ? 'active' : ''}" onclick="gotoViewPage(${i})">${i}</button>`;
+    html += `<button class="pg-btn ${i === page ? 'active' : ''}" onclick="${gotoFn}(${i})">${i}</button>`;
   }
   if (end < totalPages) html += `<span class="pg-ellipsis">…</span>`;
 
-  html += `<button class="pg-btn" ${page >= totalPages ? 'disabled' : ''} onclick="gotoViewPage(${page + 1})">
+  html += `<button class="pg-btn" ${page >= totalPages ? 'disabled' : ''} onclick="${gotoFn}(${page + 1})">
     <i class="fas fa-angle-right"></i></button>`;
-  html += `<button class="pg-btn" ${page >= totalPages ? 'disabled' : ''} onclick="gotoViewPage(${totalPages})">
+  html += `<button class="pg-btn" ${page >= totalPages ? 'disabled' : ''} onclick="${gotoFn}(${totalPages})">
     <i class="fas fa-angle-double-right"></i></button>`;
 
   html += `</div>`;
@@ -1087,6 +1092,37 @@ async function gotoViewPage(page) {
     return;
   }
   displayCurrentFolder();
+}
+
+async function gotoSearchPage(page) {
+  if (page < 1 || page > currentSearchTotalPages || page === currentSearchPage) return;
+  currentSearchPage = page;
+  try {
+    const resp = await fetch(`${API_ROOT}/search?q=${encodeURIComponent(currentSearchQuery)}&page=${page}&limit=200`);
+    const data = await resp.json();
+    const results = Array.isArray(data) ? data : (data.items || []);
+    const total = data.total ?? results.length;
+    const totalPages = data.total_pages ?? 1;
+    currentSearchTotalPages = totalPages;
+
+    if (viewMode === 'list') {
+      displayListView(results, true);
+      const listHeader = document.getElementById('listHeader');
+      if (listHeader) listHeader.style.display = results.length === 0 ? 'none' : 'flex';
+    } else {
+      displayGridView(results, true);
+      const listHeader = document.getElementById('listHeader');
+      if (listHeader) listHeader.style.display = 'none';
+    }
+
+    const emptyState = document.getElementById('emptyState');
+    if (emptyState) emptyState.style.display = results.length === 0 ? 'flex' : 'none';
+
+    renderPaginationBar(page, totalPages, total, 'gotoSearchPage');
+  } catch (err) {
+    console.error('搜索翻页失败:', err);
+    showToast('搜索翻页失败', 'danger');
+  }
 }
 
 function updateBreadcrumb() {
@@ -1421,15 +1457,23 @@ function triggerSearch(rawValue, immediate = false) {
 
   const executeSearch = async () => {
     if (!trimmed) {
+      isSearchActive = false;
       renderPaginationBar(currentViewPage, currentViewTotalPages, currentViewTotal);
       displayCurrentFolder();
       return false;
     }
 
     try {
-      const resp = await fetch(`${API_ROOT}/search?q=${encodeURIComponent(trimmed)}`);
+      const resp = await fetch(`${API_ROOT}/search?q=${encodeURIComponent(trimmed)}&page=1&limit=200`);
       const data = await resp.json();
       const results = Array.isArray(data) ? data : (data.items || []);
+      const total = data.total ?? results.length;
+      const totalPages = data.total_pages ?? 1;
+
+      isSearchActive = true;
+      currentSearchQuery = trimmed;
+      currentSearchPage = 1;
+      currentSearchTotalPages = totalPages;
 
       if (viewMode === 'list') {
         displayListView(results, true);
@@ -1444,12 +1488,10 @@ function triggerSearch(rawValue, immediate = false) {
       const emptyState = document.getElementById('emptyState');
       if (emptyState) emptyState.style.display = results.length === 0 ? 'flex' : 'none';
 
-      // \u641c\u7d22\u6a21\u5f0f\u4e0d\u663e\u793a\u5206\u9875\u6761
-      const bar = document.getElementById('paginationBar');
-      if (bar) bar.innerHTML = `<span class="pg-info">\u641c\u7d22\u5230 ${results.length} \u4e2a\u7ed3\u679c</span>`;
+      renderPaginationBar(1, totalPages, total, 'gotoSearchPage');
     } catch (err) {
-      console.error('\u641c\u7d22\u5931\u8d25:', err);
-      showToast('\u641c\u7d22\u5931\u8d25', 'danger');
+      console.error('搜索失败:', err);
+      showToast('搜索失败', 'danger');
     }
     return true;
   };

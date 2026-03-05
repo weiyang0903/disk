@@ -357,6 +357,11 @@ def delete_item(item_id):
 @app.route('/api/search', methods=['GET'])
 def search_items():
     query = request.args.get('q', '')
+    try:
+        page  = max(1, int(request.args.get('page', 1)))
+        limit = min(max(1, int(request.args.get('limit', 200))), 500)
+    except (TypeError, ValueError):
+        page, limit = 1, 200
     conn = None
     try:
         conn = get_db_connection()
@@ -364,6 +369,16 @@ def search_items():
         # 转义 LIKE 通配符
         escaped_query = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         like_pattern = f'%{escaped_query}%'
+        # 先查总数
+        c.execute('''SELECT COUNT(*) FROM items
+                     WHERE name LIKE ? ESCAPE '\\'
+                        OR description LIKE ? ESCAPE '\\'
+                        OR format LIKE ? ESCAPE '\\'
+                        OR location LIKE ? ESCAPE '\\' ''',
+                  (like_pattern, like_pattern, like_pattern, like_pattern))
+        total = c.fetchone()[0]
+        total_pages = max(1, (total + limit - 1) // limit)
+        offset = (page - 1) * limit
         c.execute('''SELECT id, name, description, location, format, type, parent_id, file_size
                      FROM items
                      WHERE name LIKE ? ESCAPE '\\'
@@ -373,8 +388,9 @@ def search_items():
                      ORDER BY
                        CASE WHEN name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END ASC,
                        CASE WHEN type='folder' THEN 0 ELSE 1 END ASC,
-                       name ASC''',
-                  (like_pattern, like_pattern, like_pattern, like_pattern, like_pattern))
+                       name ASC
+                     LIMIT ? OFFSET ?''',
+                  (like_pattern, like_pattern, like_pattern, like_pattern, like_pattern, limit, offset))
         rows = c.fetchall()
         results = [
             {"id": r[0], "name": r[1], "description": r[2],
@@ -382,7 +398,7 @@ def search_items():
              "parent_id": r[6], "file_size": r[7]}
             for r in rows
         ]
-        return jsonify(results)
+        return jsonify({"items": results, "total": total, "page": page, "total_pages": total_pages})
     except Exception as e:
         print(f"搜索错误: {e}")
         return jsonify({"error": str(e)}), 500
