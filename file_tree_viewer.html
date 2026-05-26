@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>文件树查看器（修正版）</title>
+  <style>
+    :root {
+      --bg: #071126;
+      --card: #0f1724;
+      --muted: #9aa9bf;
+      --accent: #60a5fa;
+      --accent-2: #7c3aed;
+      --glass: rgba(255, 255, 255, 0.03);
+      --radius: 10px
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      background: linear-gradient(180deg, var(--bg), #071226 60%);
+      color: #e6eef8;
+      font-family: Segoe UI, Roboto, Arial, sans-serif
+    }
+
+    .app {
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 18px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+      box-shadow: 0 6px 30px rgba(2, 6, 23, 0.6)
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 14px
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px
+    }
+
+    .controls {
+      margin-left: auto;
+      display: flex;
+      gap: 10px;
+      align-items: center
+    }
+
+    .search {
+      display: flex;
+      align-items: center;
+      background: var(--card);
+      padding: 8px;
+      border-radius: 8px
+    }
+
+    .search input {
+      background: transparent;
+      border: 0;
+      padding: 6px 8px;
+      color: inherit;
+      outline: none;
+      width: 320px
+    }
+
+    button {
+      background: var(--glass);
+      border: 1px solid rgba(255, 255, 255, 0.03);
+      padding: 8px 12px;
+      border-radius: 8px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px
+    }
+
+    button.primary {
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      color: white;
+      border: 0
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 18px;
+      margin-top: 16px
+    }
+
+    .panel {
+      background: rgba(255, 255, 255, 0.02);
+      padding: 14px;
+      border-radius: 12px
+    }
+
+    #tree {
+      max-height: 64vh;
+      overflow: auto;
+      padding: 6px;
+      font-size: 15px
+    }
+
+    .node {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 8px
+    }
+
+    .node:hover {
+      background: rgba(255, 255, 255, 0.02)
+    }
+
+    .icon {
+      width: 22px;
+      text-align: center;
+      font-size: 16px
+    }
+
+    .name {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis
+    }
+
+    .folder .name {
+      font-weight: 600
+    }
+
+    .file .name {
+      color: var(--muted)
+    }
+
+    .children {
+      margin-left: 20px;
+      border-left: 1px dashed rgba(255, 255, 255, 0.02);
+      padding-left: 10px
+    }
+
+    .collapsed>.children {
+      display: none
+    }
+
+    .match {
+      background: linear-gradient(90deg, rgba(96, 165, 250, 0.12), rgba(124, 58, 237, 0.06));
+      padding: 2px 6px;
+      border-radius: 6px
+    }
+
+    #progress-wrap {
+      width: 100%;
+      margin-top: 10px;
+      display: none;
+      align-items: center;
+      gap: 12px
+    }
+
+    #progress-bar {
+      flex: 1;
+      background: #0b1220;
+      border-radius: 999px;
+      overflow: hidden;
+      height: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.03)
+    }
+
+    #progress-bar>i {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      transition: width 160ms linear
+    }
+
+    #progress-label {
+      min-width: 70px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: right
+    }
+
+    .preview {
+      min-height: 120px;
+      color: var(--muted);
+      font-size: 14px
+    }
+
+    textarea {
+      width: 100%;
+      height: 140px;
+      border-radius: 8px;
+      background: transparent;
+      border: 1px dashed rgba(255, 255, 255, 0.04);
+      color: inherit;
+      padding: 8px;
+      font-family: monospace
+    }
+
+    @media(max-width:980px) {
+      .layout {
+        grid-template-columns: 1fr
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app" role="application">
+    <header>
+      <div>
+        <h1>📁 文件树查看器</h1>
+        <div style="color:var(--muted);font-size:13px">拖拽或选择文件/文件夹 — 实时搜索 / 导出可交互 HTML</div>
+      </div>
+
+      <div class="controls">
+        <div class="search" title="搜索">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"
+              d="M21 21l-4.35-4.35" />
+            <circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="1.2" />
+          </svg>
+          <input id="searchInput" placeholder="输入文件名或文件夹名搜索 (回车选中首项)" />
+        </div>
+
+        <button id="chooseBtn">选择文件</button>
+        <input id="fileInput" type="file" webkitdirectory multiple style="display:none;" />
+
+        <button id="downloadBtn" class="primary" title="导出当前显示为 HTML">📥 下载当前文件树</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <div id="breadcrumb" style="color:var(--muted);font-size:13px;margin-bottom:8px">当前: /</div>
+
+        <div id="tree" tabindex="0" aria-label="文件树"></div>
+
+        <div id="progress-wrap">
+          <div id="progress-bar"><i id="progress-inner"></i></div>
+          <div id="progress-label">0%</div>
+        </div>
+
+        <div style="margin-top:10px;color:var(--muted);font-size:13px">提示：点击文件夹展开/收起。使用方向键可导航。</div>
+      </section>
+
+      <aside class="panel">
+        <h3 style="margin-top:0">文件预览</h3>
+        <div class="preview" id="preview">请选择一个文件查看简单信息。</div>
+
+        <h4 style="margin-top:12px">JSON 编辑（可选）</h4>
+        <textarea id="jsonArea" spellcheck="false" placeholder='可粘贴 JSON 结构并点击「应用 JSON」'></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="applyJson">应用 JSON</button>
+          <button id="resetBtn">清空树</button>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    /* 状态 */
+    let root = { name: 'root', type: 'folder', children: [] };
+    let expanded = new Set();
+    let searchQuery = '';
+
+    /* DOM */
+    const treeEl = document.getElementById('tree');
+    const searchInput = document.getElementById('searchInput');
+    const fileInput = document.getElementById('fileInput');
+    const preview = document.getElementById('preview');
+    const jsonArea = document.getElementById('jsonArea');
+    const breadcrumb = document.getElementById('breadcrumb');
+    const progressWrap = document.getElementById('progress-wrap');
+    const progressInner = document.getElementById('progress-inner');
+    const progressLabel = document.getElementById('progress-label');
+
+    /* 辅助 */
+    function pathFor(parentPath, name) { return parentPath ? parentPath + '/' + name : name; }
+    function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+    function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'); }
+
+    /* 从 fileList 构建树 */
+    function buildTreeFromFileList(fileList) {
+      const rootNode = { name: 'root', type: 'folder', children: [] };
+      for (const f of fileList) {
+        const path = f.webkitRelativePath || f.name;
+        const parts = path.split('/').filter(Boolean);
+        let node = rootNode;
+        for (let i = 0; i < parts.length; i++) {
+          const name = parts[i];
+          let child = (node.children || []).find(c => c.name === name);
+          const isLast = i === parts.length - 1;
+          if (!child) {
+            child = { name, type: isLast ? 'file' : 'folder' };
+            if (!isLast) child.children = [];
+            node.children = node.children || [];
+            node.children.push(child);
+          }
+          node = child;
+        }
+      }
+      return rootNode;
+    }
+
+    /* 标记可见（搜索） */
+    function markVisible(node, q) {
+      const selfMatch = !q || node.name.toLowerCase().includes(q.toLowerCase());
+      let childMatch = false;
+      if (node.children && node.children.length) {
+        for (const ch of node.children) childMatch = markVisible(ch, q) || childMatch;
+      }
+      node._visible = selfMatch || childMatch;
+      node._selfMatch = selfMatch;
+      return node._visible;
+    }
+
+    /* 渲染 */
+    function render() {
+      treeEl.innerHTML = '';
+      markVisible(root, searchQuery);
+      renderNode(root, treeEl, '');
+    }
+    function renderNode(node, container, parentPath) {
+      if (!node._visible) return;
+      const currentPath = pathFor(parentPath, node.name);
+      const item = document.createElement('div');
+      item.className = 'node ' + (node.type === 'folder' ? 'folder' : 'file');
+      item.dataset.path = currentPath;
+      item.dataset.type = node.type;
+
+      const icon = document.createElement('div'); icon.className = 'icon'; icon.textContent = node.type === 'folder' ? (expanded.has(currentPath) ? '📂' : '📁') : '📄';
+      item.appendChild(icon);
+
+      const name = document.createElement('div'); name.className = 'name';
+      if (node._selfMatch && searchQuery) {
+        const regex = new RegExp('(' + escapeRegExp(searchQuery) + ')', 'ig');
+        name.innerHTML = escapeHtml(node.name).replace(regex, '<span class="match">$1</span>');
+      } else name.textContent = node.name;
+      item.appendChild(name);
+
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (node.type === 'folder') {
+          if (expanded.has(currentPath)) expanded.delete(currentPath); else expanded.add(currentPath);
+          render();
+        } else { showPreview(node, currentPath); }
+        updateBreadcrumb(currentPath);
+      });
+
+      item.tabIndex = 0;
+      item.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); item.click(); }
+        else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const items = Array.from(document.querySelectorAll('.node'));
+          const idx = items.indexOf(item); const next = e.key === 'ArrowDown' ? items[idx + 1] : items[idx - 1];
+          if (next) next.focus();
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          if (node.type === 'folder' && expanded.has(currentPath)) { expanded.delete(currentPath); render(); }
+          else { const parent = currentPath.split('/').slice(0, -1).join('/'); if (parent) { const pel = document.querySelector('[data-path=\"' + cssEscape(parent) + '\"]'); if (pel) pel.focus(); } }
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          if (node.type === 'folder') { expanded.add(currentPath); render(); setTimeout(() => { const el = document.querySelector('[data-path=\"' + cssEscape(currentPath) + '\"]'); if (el) el.focus(); }, 50); }
+        }
+      });
+
+      container.appendChild(item);
+
+      if (node.children && node.children.length && expanded.has(currentPath)) {
+        const wrapper = document.createElement('div'); wrapper.className = 'children';
+        for (const ch of node.children) renderNode(ch, wrapper, currentPath);
+        container.appendChild(wrapper);
+      }
+    }
+    function cssEscape(s) {
+      // Prefer native CSS.escape when available; otherwise do a minimal safe escape
+      try { if (window.CSS && CSS.escape) return CSS.escape(s); } catch (e) { }
+      return String(s).replace(/(["'\\\\])/g, '\\\\$1').replace(/\s+/g, ' ');
+    }
+    function updateBreadcrumb(p) { breadcrumb.textContent = p ? ('当前: /' + p) : '当前: /'; }
+
+    /* 进度条辅助（基于文件计数） */
+    async function showProgressDuring(files, buildFn) {
+      if (!files || files.length === 0) return;
+      progressWrap.style.display = 'flex';
+      progressInner.style.width = '0%';
+      progressLabel.textContent = '0%';
+      const total = files.length;
+      let processed = 0;
+      // Update quickly while building in memory
+      for (let i = 0; i < files.length; i++) {
+        processed++;
+        const pct = Math.round((processed / total) * 100);
+        progressInner.style.width = pct + '%';
+        progressLabel.textContent = pct + '%';
+        if (i % 50 === 0) await new Promise(r => setTimeout(r, 8));
+      }
+      // Build final tree
+      root = buildFn(files);
+      expanded.clear(); expanded.add(root.name);
+      markVisible(root, searchQuery);
+      render();
+      setTimeout(() => { progressWrap.style.display = 'none'; }, 300);
+    }
+
+    /* 事件：文件选择 & 拖拽 */
+    document.getElementById('chooseBtn').addEventListener('click', () => { fileInput.click(); });
+    fileInput.addEventListener('change', (e) => { const files = e.target.files; if (files && files.length) showProgressDuring(files, buildTreeFromFileList); });
+    window.addEventListener('dragover', e => e.preventDefault());
+    const appEl = document.querySelector('.app');
+    appEl.addEventListener('dragover', e => { e.preventDefault(); appEl.style.opacity = 0.95; });
+    appEl.addEventListener('dragleave', () => { appEl.style.opacity = 1; });
+    appEl.addEventListener('drop', (e) => { e.preventDefault(); appEl.style.opacity = 1; const files = e.dataTransfer.files; if (files && files.length) showProgressDuring(files, buildTreeFromFileList); });
+
+    /* 预览 */
+    function showPreview(node, path) {
+      const ext = (node.name.split('.').pop() || '').toLowerCase();
+      const size = fakeSize(node.name);
+      preview.innerHTML = '<div><strong>名称：</strong>' + escapeHtml(node.name) + '</div>'
+        + '<div><strong>路径：</strong>/' + escapeHtml(path) + '</div>'
+        + '<div><strong>类型：</strong>' + node.type + (ext ? ' (' + ext + ')' : '') + '</div>'
+        + '<div><strong>大小（估算）：</strong>' + size + '</div>';
+      if (['txt', 'md', 'json', 'js', 'css', 'html'].includes(ext)) {
+        preview.innerHTML += '<hr><pre style="white-space:pre-wrap;max-height:160px;overflow:auto;background:transparent;padding:8px;border-radius:6px;border:1px dashed rgba(255,255,255,0.03);">示例内容：这是文件 ' + escapeHtml(node.name) + ' 的模拟预览。</pre>';
+      }
+    }
+    function fakeSize(name) { let n = 0; for (const c of name) n += c.charCodeAt(0); const kb = (n % 900) + 10; return kb + ' KB'; }
+
+    /* 搜索 */
+    searchInput.addEventListener('input', (e) => { searchQuery = e.target.value.trim(); if (searchQuery) expandParentsForMatches(root, ''); render(); });
+    function expandParentsForMatches(node, parentPath) {
+      if (!markVisible(node, searchQuery)) return false;
+      const currentPath = pathFor(parentPath, node.name);
+      if (node._selfMatch) {
+        const parts = currentPath.split('/');
+        for (let i = 1; i < parts.length; i++) { const p = parts.slice(0, i + 1).join('/'); expanded.add(p); }
+      }
+      if (node.children) for (const ch of node.children) expandParentsForMatches(ch, currentPath);
+    }
+
+    /* JSON 编辑 */
+    document.getElementById('applyJson').addEventListener('click', () => {
+      try { const obj = JSON.parse(jsonArea.value); if (!obj || obj.type !== 'folder') { alert('根对象必须为 type:\"folder\" 的对象'); return; } root = obj; expanded.clear(); expanded.add(root.name); markVisible(root, searchQuery); render(); } catch (err) { alert('无效 JSON: ' + err.message); }
+    });
+    document.getElementById('resetBtn').addEventListener('click', () => { root = { name: 'root', type: 'folder', children: [] }; expanded.clear(); searchQuery = ''; searchInput.value = ''; jsonArea.value = ''; render(); });
+
+    /* 导出（含搜索 + 展开收缩） */
+    /* 为避免模板嵌套引号错误，这里用字符串拼接生成导出 HTML，并在导出文件中加入独立的搜索与折叠脚本 */
+    document.getElementById('downloadBtn').addEventListener('click', () => {
+      const treeHtml = treeEl.innerHTML;
+      if (!treeHtml.trim()) { alert('当前没有可导出的内容，请先选择文件/文件夹。'); return; }
+
+      // 导出页面的 HTML（注：使用单引号/双引号小心嵌套）
+      const exportPage =
+        '<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/><title>导出的文件树</title>'
+        + '<style>body{font-family:Segoe UI,Roboto,Arial;background:#071226;color:#e6eef8;padding:18px}h1{margin:0 0 10px}input{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:inherit;margin-bottom:10px} .node{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px} .children{margin-left:20px;border-left:1px dashed rgba(255,255,255,0.04);padding-left:8px} .collapsed > .children{display:none} .match{background:linear-gradient(90deg, rgba(96,165,250,0.12), rgba(124,58,237,0.06));padding:2px 6px;border-radius:6px}</style>'
+        + '</head><body>'
+        + '<h1>📁 导出的文件树</h1>'
+        + '<input id=\"expSearch\" placeholder=\"搜索...\" />'
+        + '<div id=\"expTree\">' + treeHtml + '</div>'
+        + '<script>'
+        + '(function(){'
+        + 'var expTree=document.getElementById("expTree");'
+        + 'expTree.addEventListener("click",function(e){'
+        + 'var node=e.target.closest(".node");'
+        + 'if(!node||!node.classList.contains("folder"))return;'
+        + 'node.classList.toggle("collapsed");'
+        + '});'
+        + 'document.getElementById("expSearch").addEventListener("input",function(e){'
+        + 'var q=e.target.value.trim().toLowerCase();'
+        + 'var nodes=Array.from(expTree.querySelectorAll(".node"));'
+        + 'if(!q){nodes.forEach(function(n){n.style.display="flex";n.classList.remove("match");});return;}'
+        + 'nodes.forEach(function(n){'
+        + 'var txt=(n.textContent||"").toLowerCase();'
+        + 'if(txt.indexOf(q)>=0){'
+        + 'n.style.display="flex";n.classList.add("match");'
+        + 'var p=n.parentElement;'
+        + 'while(p&&p!==expTree){'
+        + 'if(p.classList&&p.classList.contains("children")){'
+        + 'p.style.display="block";'
+        + 'var folder=p.previousElementSibling;'
+        + 'if(folder&&folder.classList){folder.style.display="flex";folder.classList.remove("collapsed");}'
+        + '}'
+        + 'p=p.parentElement;'
+        + '}'
+        + '}else{n.style.display="none";n.classList.remove("match");}'
+        + '});'
+        + '});'
+        + '})();'
+        + '</' + 'script></body></html>';
+
+      const blob = new Blob([exportPage], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'MyFileTree_' + new Date().toISOString().slice(0, 10) + '.html';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+
+/* 初始渲染 */
+markVisible(root, searchQuery);
+render();
+console.log('文件树查看器已就绪（修正版）。');
+</script>
+</body>
+
+</html>
