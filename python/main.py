@@ -2,6 +2,13 @@
 # main.py (Python 3.14 compatible)
 # ================================
 
+import sys
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 # ---- Compatibility Patch for Python 3.14 ----
 import pkgutil
 if not hasattr(pkgutil, "get_loader"):
@@ -28,6 +35,11 @@ from datetime import datetime
 
 app = Flask(__name__, static_folder='../', static_url_path='/')
 CORS(app)
+
+
+@app.route('/')
+def index():
+    return app.send_static_file('index.html')
 
 # 数据库路径
 DB_PATH = os.path.join(os.path.dirname(__file__), 'file_manager.db')
@@ -61,14 +73,14 @@ def init_db():
             c.execute("SELECT file_size FROM items LIMIT 1")
         except sqlite3.OperationalError:
             c.execute("ALTER TABLE items ADD COLUMN file_size TEXT")
-            print("✓ Added file_size column")
+            print("[OK] Added file_size column")
         # ---- 性能索引 ----
         c.execute("CREATE INDEX IF NOT EXISTS idx_items_parent_id ON items(parent_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_items_type ON items(type)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_items_name ON items(name)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_items_format ON items(format)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_items_location ON items(location)")
-        print("✓ 数据库索引已就绪")
+        print("[OK] 数据库索引已就绪")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -208,6 +220,8 @@ def add_item():
     name = str(data.get('name', '')).strip()
     if not name:
         return jsonify({"error": "Name cannot be empty"}), 400
+    if '/' in name:
+        return jsonify({"error": "名称中不能包含斜杠字符 \"/\""}), 400
     # Validate parent_id if provided
     parent_id = data.get('parent_id')
     if parent_id is not None:
@@ -257,6 +271,8 @@ def edit_item(item_id):
         name_val = str(data['name']).strip() if data['name'] else ''
         if not name_val:
             return jsonify({"error": "Name cannot be empty"}), 400
+        if '/' in name_val:
+            return jsonify({"error": "名称中不能包含斜杠字符 \"/\""}), 400
     conn = None
     try:
         conn = get_db_connection()

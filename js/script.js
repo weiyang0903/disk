@@ -47,6 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadAllData();
   createContextMenu();
   setupContextMenuHandlers();
+  initAddressBar();
 });
 
 function initializeUI() {
@@ -129,6 +130,145 @@ function initializeUI() {
 
   // 侧边栏拖拽调整
   initSidebarResize();
+}
+
+// ===================================
+// 可编辑地址栏
+// ===================================
+function initAddressBar() {
+  const addressBar = document.getElementById('addressBar');
+  const breadcrumb = document.getElementById('breadcrumb');
+  const addressInput = document.getElementById('addressInput');
+
+  if (!addressBar || !breadcrumb || !addressInput) return;
+
+  // 点击地址栏切换到输入模式
+  breadcrumb.addEventListener('click', function(e) {
+    // 如果点击的是面包屑项，让它们正常处理
+    if (e.target.closest('.breadcrumb-item')) return;
+    enterAddressInputMode();
+  });
+
+  // 按 Enter 导航
+  addressInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const path = this.value.trim();
+      if (path) {
+        navigateByPathInput(path);
+      }
+      exitAddressInputMode();
+    } else if (e.key === 'Escape') {
+      exitAddressInputMode();
+    }
+  });
+
+  // 失焦时退出编辑模式
+  addressInput.addEventListener('blur', function() {
+    exitAddressInputMode();
+  });
+
+  // 允许点击地址栏空白处（非输入框）重新进入编辑
+  addressBar.addEventListener('click', function(e) {
+    if (e.target === addressBar || e.target.closest('.address-bar') === addressBar) {
+      if (addressInput.style.display !== 'block') {
+        enterAddressInputMode();
+      }
+    }
+  });
+}
+
+function getCurrentPathString() {
+  // 构建当前路径字符串：此电脑/文件夹1/文件夹2
+  const segments = ['此电脑'];
+  let current = currentFolder;
+  const tempPath = [];
+  while (current) {
+    tempPath.unshift(current.name);
+    current = current.parent_id ? allFolders.find(i => i.id === current.parent_id) : null;
+  }
+  segments.push(...tempPath);
+  return segments.join('/');
+}
+
+function enterAddressInputMode() {
+  const breadcrumb = document.getElementById('breadcrumb');
+  const addressInput = document.getElementById('addressInput');
+  if (!breadcrumb || !addressInput) return;
+
+  breadcrumb.style.display = 'none';
+  addressInput.style.display = 'block';
+  addressInput.value = getCurrentPathString();
+  addressInput.focus();
+  addressInput.select();
+}
+
+function exitAddressInputMode() {
+  const breadcrumb = document.getElementById('breadcrumb');
+  const addressInput = document.getElementById('addressInput');
+  if (!breadcrumb || !addressInput) return;
+
+  addressInput.style.display = 'none';
+  breadcrumb.style.display = 'flex';
+}
+
+function navigateByPathInput(pathStr) {
+  // 用户输入的路径格式: "此电脑/文件夹1/文件夹2"
+  // 或者 "文件夹1/文件夹2"
+  // 如果输入是 "此电脑" 或 "根目录" 等，导航到根
+  let cleaned = pathStr.trim();
+  
+  // 处理 "此电脑" 作为根目录
+  if (cleaned === '此电脑' || cleaned === '根目录' || cleaned === '/' || cleaned === '\\') {
+    navigateToFolder(null);
+    return;
+  }
+  
+  // 去掉 "此电脑/" 前缀（如果有）
+  if (cleaned.startsWith('此电脑')) {
+    cleaned = cleaned.replace(/^此电脑\s*[\/>\\]?\s*/, '');
+  }
+
+  if (!cleaned) {
+    // 如果只有 "此电脑"，导航到根
+    navigateToFolder(null);
+    return;
+  }
+
+  // 按分隔符拆分路径
+  const parts = cleaned.split(/\s*[\/>\\\u203a]\s*/).map(s => s.trim()).filter(Boolean);
+
+  if (parts.length === 0) {
+    showToast('无效的路径格式', 'warning');
+    return;
+  }
+
+  // 从根开始逐级导航
+  let currentItems = allFolders.filter(f => !f.parent_id);  // 根级别项目
+  let targetFolder = null;
+
+  for (let i = 0; i < parts.length; i++) {
+    const partName = parts[i].trim();
+    // 在当前级别查找匹配的文件夹
+    const match = currentItems.find(item =>
+      item.type === 'folder' && item.name.toLowerCase() === partName.toLowerCase()
+    );
+    if (match) {
+      targetFolder = match;
+      // 准备下一级的项目
+      currentItems = allFolders.filter(f => f.parent_id === match.id);
+    } else {
+      showToast(`找不到文件夹: "${partName}"`, 'warning');
+      return;
+    }
+  }
+
+  if (targetFolder) {
+    navigateToFolder(targetFolder);
+  } else {
+    // 如果 parts 是空的，导航到根
+    navigateToFolder(null);
+  }
 }
 
 // ===================================
@@ -1643,6 +1783,11 @@ async function handleFormSubmit(e) {
     nameEl.focus();
     return;
   }
+  if (name.includes('/')) {
+    showToast('名称中不能包含斜杠字符 "/"', 'warning');
+    nameEl.focus();
+    return;
+  }
   if (type !== 'file' && type !== 'folder') {
     showToast('类型无效', 'danger');
     return;
@@ -2061,6 +2206,28 @@ async function importData() {
       showToast('导入文件格式错误：需要 JSON 数组', 'danger');
       return;
     }
+
+    // 检查是否有任何导入的文件夹或文件名称包含斜杠 "/"
+    let hasSlash = false;
+    for (const item of data) {
+      if (item.name && item.name.includes('/')) {
+        hasSlash = true;
+        break;
+      }
+    }
+
+    if (hasSlash) {
+      const proceed = confirm('检测到要导入的数据中，有些文件或文件夹的名称包含斜杠字符 "/"。由于系统限制，名称中不能包含该字符。\n\n系统可自动将这些名称中的 "/" 替换为 "-" 以便继续导入。\n\n您是否要将 "/" 替换为 "-" 并继续导入？');
+      if (!proceed) {
+        return;
+      }
+      // 将所有名称中的 "/" 替换成 "-"
+      for (const item of data) {
+        if (item.name && item.name.includes('/')) {
+          item.name = item.name.replace(/\//g, '-');
+        }
+      }
+    }
     const response = await fetch(`${API_ROOT}/import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2430,6 +2597,42 @@ async function startLocalImport() {
   if (!folders.length && !files.length) {
     showToast('请先选择文件或文件夹', 'warning');
     return;
+  }
+
+  // 检查是否有任何导入的文件夹或文件名称包含斜杠 "/"
+  let hasSlash = false;
+  for (const folder of folders) {
+    if (folder.name.includes('/')) {
+      hasSlash = true;
+      break;
+    }
+  }
+  if (!hasSlash) {
+    for (const item of files) {
+      const name = getFileNameWithoutExtension(item.fileName);
+      if (name.includes('/') || item.fileName.includes('/')) {
+        hasSlash = true;
+        break;
+      }
+    }
+  }
+
+  if (hasSlash) {
+    const proceed = confirm('检测到要导入的本地资源中，有些文件夹或文件的名称包含斜杠字符 "/"。由于系统限制，名称中不能包含该字符。\n\n系统可自动将这些名称中的 "/" 替换为 "-" 以便继续导入。\n\n您是否要将 "/" 替换为 "-" 并继续导入？');
+    if (!proceed) {
+      return;
+    }
+    // 将所有名称中的 "/" 替换成 "-"
+    folders.forEach(folder => {
+      if (folder.name.includes('/')) {
+        folder.name = folder.name.replace(/\//g, '-');
+      }
+    });
+    files.forEach(item => {
+      if (item.fileName.includes('/')) {
+        item.fileName = item.fileName.replace(/\//g, '-');
+      }
+    });
   }
 
   const baseInput = document.getElementById('localImportBasePath');
