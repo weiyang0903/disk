@@ -74,6 +74,12 @@ def init_db():
         except sqlite3.OperationalError:
             c.execute("ALTER TABLE items ADD COLUMN file_size TEXT")
             print("[OK] Added file_size column")
+        # Auto-add updated_at column to existing tables
+        try:
+            c.execute("SELECT updated_at FROM items LIMIT 1")
+        except sqlite3.OperationalError:
+            c.execute("ALTER TABLE items ADD COLUMN updated_at TEXT")
+            print("[OK] Added updated_at column")
         # ---- 性能索引 ----
         c.execute("CREATE INDEX IF NOT EXISTS idx_items_parent_id ON items(parent_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_items_type ON items(type)")
@@ -87,6 +93,162 @@ def init_db():
         print(f"数据库初始化错误: {e}")
 
 init_db()
+
+# ---- 本地磁盘浏览与解析 APIs (用于批量导入合并功能) ----
+import string
+import ctypes
+
+def get_logical_drives():
+    drives = []
+    bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+    for letter in string.ascii_uppercase:
+        if bitmask & 1:
+            drives.append(f"{letter}:\\")
+        bitmask >>= 1
+    return drives
+
+@app.route('/api/local/list', methods=['GET'])
+def list_local_directory():
+    path = request.args.get('path', '').strip()
+    
+    if not path:
+        try:
+            drives = get_logical_drives()
+            return jsonify({
+                "current_path": "",
+                "parent_path": "",
+                "items": [{"name": drive, "path": drive, "type": "folder"} for drive in drives]
+            })
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+            
+    path = os.path.abspath(path)
+    
+    if not os.path.exists(path):
+        return jsonify({"error": "Path does not exist"}), 404
+        
+    if not os.path.isdir(path):
+        return jsonify({"error": "Path is not a directory"}), 400
+        
+    try:
+        items = []
+        for entry in os.scandir(path):
+            try:
+                is_dir = entry.is_dir()
+                size = entry.stat().st_size if not is_dir else None
+                items.append({
+                    "name": entry.name,
+                    "path": entry.path,
+                    "type": "folder" if is_dir else "file",
+                    "size": size
+                })
+            except OSError:
+                continue
+                
+        items.sort(key=lambda x: (0 if x["type"] == "folder" else 1, x["name"].lower()))
+        
+        parent_path = os.path.dirname(path)
+        if parent_path == path: 
+            parent_path = ""
+            
+        return jsonify({
+            "current_path": path,
+            "parent_path": parent_path,
+            "items": items
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/local/resolve', methods=['POST'])
+def resolve_local_paths():
+    data = request.json or {}
+    paths = data.get('paths', [])
+    base_path = data.get('base_path', '').strip()
+    
+    if not base_path and paths:
+        if len(paths) == 1:
+            base_path = os.path.dirname(paths[0])
+        else:
+            try:
+                base_path = os.path.commonpath(paths)
+            except Exception:
+                base_path = os.path.dirname(paths[0])
+            
+    if base_path:
+        base_path = os.path.abspath(base_path)
+        
+    folders = []
+    files = []
+    
+    for p in paths:
+        p = os.path.abspath(p)
+        if not os.path.exists(p):
+            continue
+            
+        if os.path.isfile(p):
+            rel_path = os.path.relpath(p, base_path) if base_path else os.path.basename(p)
+            rel_path = rel_path.replace('\\', '/')
+            folder_path = os.path.dirname(rel_path) if '/' in rel_path else ''
+            file_name = os.path.basename(p)
+            try:
+                file_size = os.path.getsize(p)
+            except OSError:
+                file_size = 0
+            files.append({
+                "fileName": file_name,
+                "folderPath": folder_path,
+                "relPath": rel_path,
+                "fileSize": file_size,
+                "absolutePath": p
+            })
+        elif os.path.isdir(p):
+            rel_folder_path = os.path.relpath(p, base_path) if base_path else os.path.basename(p)
+            rel_folder_path = rel_folder_path.replace('\\', '/')
+            parent_path = os.path.dirname(rel_folder_path) if '/' in rel_folder_path else ''
+            
+            folders.append({
+                "name": os.path.basename(p),
+                "path": rel_folder_path,
+                "parentPath": parent_path,
+                "depth": len(rel_folder_path.split('/'))
+            })
+            
+            for root, dirs, filenames in os.walk(p):
+                for d in dirs:
+                    full_dir_path = os.path.join(root, d)
+                    rel_d = os.path.relpath(full_dir_path, base_path) if base_path else os.path.basename(full_dir_path)
+                    rel_d = rel_d.replace('\\', '/')
+                    parent_d = os.path.dirname(rel_d) if '/' in rel_d else ''
+                    folders.append({
+                        "name": d,
+                        "path": rel_d,
+                        "parentPath": parent_d,
+                        "depth": len(rel_d.split('/'))
+                    })
+                for f in filenames:
+                    full_file_path = os.path.join(root, f)
+                    rel_f = os.path.relpath(full_file_path, base_path) if base_path else os.path.basename(full_file_path)
+                    rel_f = rel_f.replace('\\', '/')
+                    folder_f = os.path.dirname(rel_f) if '/' in rel_f else ''
+                    try:
+                        file_size = os.path.getsize(full_file_path)
+                    except OSError:
+                        file_size = 0
+                    files.append({
+                        "fileName": f,
+                        "folderPath": folder_f,
+                        "relPath": rel_f,
+                        "fileSize": file_size,
+                        "absolutePath": full_file_path
+                    })
+                    
+    folders.sort(key=lambda x: x["depth"])
+    
+    return jsonify({
+        "base_path": base_path,
+        "folders": folders,
+        "files": files
+    })
 
 # 获取项目（支持 parent_id 过滤 + 分页 + 排序）
 @app.route('/api/items', methods=['GET'])
@@ -190,11 +352,28 @@ def get_item(item_id):
         c.execute("SELECT id, name, description, location, format, type, parent_id, file_size FROM items WHERE id = ?", (item_id,))
         row = c.fetchone()
         if row:
-            return jsonify({
+            data = {
                 "id": row[0], "name": row[1], "description": row[2],
                 "location": row[3], "format": row[4], "type": row[5],
                 "parent_id": row[6], "file_size": row[7]
-            })
+            }
+            if row[5] == 'folder':
+                # 递归计算该文件夹内所有文件的总大小
+                all_ids = get_all_descendants(item_id, conn)
+                if all_ids:
+                    placeholders = ','.join('?' * len(all_ids))
+                    c.execute(f"SELECT file_size FROM items WHERE id IN ({placeholders}) AND type='file'", all_ids)
+                    size_rows = c.fetchall()
+                    total_bytes = 0
+                    for sr in size_rows:
+                        if sr[0]:
+                            total_bytes += parse_file_size(sr[0])
+                    data["total_size_bytes"] = total_bytes
+                    data["total_size_display"] = format_size_display(total_bytes)
+                else:
+                    data["total_size_bytes"] = 0
+                    data["total_size_display"] = "0 B"
+            return jsonify(data)
         return jsonify({"error": "Item not found"}), 404
     except Exception as e:
         print(f"获取项目详情错误: {e}")
@@ -230,19 +409,24 @@ def add_item():
         except (TypeError, ValueError):
             return jsonify({"error": "Invalid parent_id"}), 400
 
+    updated_at = data.get('updated_at')
+    if not updated_at:
+        updated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
-        c.execute('''INSERT INTO items (name, description, location, format, type, parent_id, file_size)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
+        c.execute('''INSERT INTO items (name, description, location, format, type, parent_id, file_size, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                   (name,
                    data.get('description'),
                    data.get('location'),
                    data.get('format'),
                    data.get('type'),
                    parent_id,
-                   data.get('file_size')))
+                   data.get('file_size'),
+                   updated_at))
         conn.commit()
         new_id = c.lastrowid
         return jsonify({"message": "Item added successfully", "id": new_id})
@@ -302,9 +486,10 @@ def edit_item(item_id):
                 row = c.fetchone()
                 ancestor = row[0] if row else None
         
-        c.execute('''UPDATE items SET name=?, description=?, location=?, format=?, parent_id=?, file_size=?
+        updated_at = data.get('updated_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        c.execute('''UPDATE items SET name=?, description=?, location=?, format=?, parent_id=?, file_size=?, updated_at=?
                      WHERE id=?''',
-                  (name, description, location, format_value, parent_id, file_size, item_id))
+                  (name, description, location, format_value, parent_id, file_size, updated_at, item_id))
         conn.commit()
         return jsonify({"message": "Item updated successfully"})
     except Exception as e:
@@ -373,11 +558,17 @@ def delete_item(item_id):
 @app.route('/api/search', methods=['GET'])
 def search_items():
     query = request.args.get('q', '')
+    fields_raw = request.args.get('fields', '')
+    
+    # 解析前端勾选的筛选维度
+    fields = [f.strip() for f in fields_raw.split(',') if f.strip()] if fields_raw else []
+    
     try:
         page  = max(1, int(request.args.get('page', 1)))
         limit = min(max(1, int(request.args.get('limit', 200))), 500)
     except (TypeError, ValueError):
         page, limit = 1, 200
+        
     conn = None
     try:
         conn = get_db_connection()
@@ -385,36 +576,56 @@ def search_items():
         # 转义 LIKE 通配符
         escaped_query = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         like_pattern = f'%{escaped_query}%'
+        
+        # 映射前端字段名到数据库列名
+        field_map = {
+            'name': 'name',
+            'date': 'updated_at',
+            'path': 'location',
+            'desc': 'description',
+            'format': 'format'
+        }
+        
+        # 根据勾选的字段构建 OR 条件
+        conditions = []
+        params = []
+        for f in fields:
+            col = field_map.get(f)
+            if col:
+                conditions.append(f"{col} LIKE ? ESCAPE '\\'")
+                params.append(like_pattern)
+                
+        if not conditions:
+            # 如果什么都没勾选，默认搜索文件名和描述
+            conditions.append("name LIKE ? ESCAPE '\\'")
+            params.append(like_pattern)
+            
+        where_clause = " OR ".join(conditions)
+        
         # 先查总数
-        c.execute('''SELECT COUNT(*) FROM items
-                     WHERE name LIKE ? ESCAPE '\\'
-                        OR description LIKE ? ESCAPE '\\'
-                        OR format LIKE ? ESCAPE '\\'
-                        OR location LIKE ? ESCAPE '\\' ''',
-                  (like_pattern, like_pattern, like_pattern, like_pattern))
+        c.execute(f"SELECT COUNT(*) FROM items WHERE {where_clause}", params)
         total = c.fetchone()[0]
         total_pages = max(1, (total + limit - 1) // limit)
         offset = (page - 1) * limit
-        c.execute('''SELECT id, name, description, location, format, type, parent_id, file_size
-                     FROM items
-                     WHERE name LIKE ? ESCAPE '\\'
-                        OR description LIKE ? ESCAPE '\\'
-                        OR format LIKE ? ESCAPE '\\'
-                        OR location LIKE ? ESCAPE '\\'
-                     ORDER BY
-                       CASE WHEN type='folder' THEN 0 ELSE 1 END ASC,
-                       CASE WHEN name = ?                    THEN 0
-                            WHEN name LIKE ? ESCAPE '\\' THEN 1
-                            ELSE 2 END ASC,
-                       name ASC
-                     LIMIT ? OFFSET ?''',
-                  (like_pattern, like_pattern, like_pattern, like_pattern,
-                   query, like_pattern, limit, offset))
+        
+        # 搜索结果（按类型和名称相关度排序）
+        sql = f'''SELECT id, name, description, location, format, type, parent_id, file_size, updated_at
+                  FROM items
+                  WHERE {where_clause}
+                  ORDER BY
+                    CASE WHEN type='folder' THEN 0 ELSE 1 END ASC,
+                    CASE WHEN name = ?                    THEN 0
+                         WHEN name LIKE ? ESCAPE '\\' THEN 1
+                         ELSE 2 END ASC,
+                    name ASC
+                  LIMIT ? OFFSET ?'''
+                  
+        c.execute(sql, params + [query, like_pattern, limit, offset])
         rows = c.fetchall()
         results = [
             {"id": r[0], "name": r[1], "description": r[2],
              "location": r[3], "format": r[4], "type": r[5],
-             "parent_id": r[6], "file_size": r[7]}
+             "parent_id": r[6], "file_size": r[7], "updated_at": r[8]}
             for r in rows
         ]
         return jsonify({"items": results, "total": total, "page": page, "total_pages": total_pages})
@@ -663,7 +874,8 @@ def import_data():
                 'format': raw.get('format'),
                 'type': raw.get('type'),
                 'old_parent_id': parent_id,
-                'file_size': raw.get('file_size')
+                'file_size': raw.get('file_size'),
+                'updated_at': raw.get('updated_at') or datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
 
         old_to_new = {}
@@ -675,15 +887,16 @@ def import_data():
                 parent_old_id = entry['old_parent_id']
                 if parent_old_id is None or parent_old_id in old_to_new:
                     parent_new_id = old_to_new.get(parent_old_id)
-                    c.execute('''INSERT INTO items (name, description, location, format, type, parent_id, file_size)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                    c.execute('''INSERT INTO items (name, description, location, format, type, parent_id, file_size, updated_at)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                               (entry['name'],
                                entry['description'],
                                entry['location'],
                                entry['format'],
                                entry['type'],
                                parent_new_id,
-                               entry.get('file_size')))
+                               entry.get('file_size'),
+                               entry.get('updated_at')))
                     new_id = c.lastrowid
                     if entry['old_id'] is not None:
                         old_to_new[entry['old_id']] = new_id
@@ -695,10 +908,10 @@ def import_data():
                 # 剩余项目的 parent_id 在导入数据中找不到，
                 # 将其挂载到根目录（parent_id=None）而不是整体失败
                 for entry in remaining[:]:
-                    c.execute('''INSERT INTO items (name, description, location, format, type, parent_id, file_size)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                    c.execute('''INSERT INTO items (name, description, location, format, type, parent_id, file_size, updated_at)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                               (entry['name'], entry['description'], entry['location'],
-                               entry['format'], entry['type'], None, entry.get('file_size')))
+                               entry['format'], entry['type'], None, entry.get('file_size'), entry.get('updated_at')))
                     new_id = c.lastrowid
                     if entry['old_id'] is not None:
                         old_to_new[entry['old_id']] = new_id

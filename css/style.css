@@ -184,7 +184,7 @@ body {
   background: rgba(255, 255, 255, 0.95);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  padding: 6px 12px 6px 34px;
+  padding: 6px 36px 6px 34px;
   min-width: 220px;
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
@@ -1792,4 +1792,145 @@ textarea.form-control {
   padding: 0 4px;
   color: var(--text-tertiary);
   font-size: 12px;
+}
+
+/* ============ 高级搜索筛选样式 ============ */
+.search-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  position: relative;
+}
+
+.btn-search-filter {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
+.btn-search-filter:hover {
+  background: var(--bg-hover);
+  color: var(--accent-blue);
+}
+
+.btn-search-filter.active {
+  color: var(--accent-blue);
+  background: var(--bg-selected);
+}
+
+.search-filters-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 12px;
+  min-width: 180px;
+  display: none; /* 默认隐藏 */
+  z-index: 1000;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.search-filters-dropdown.show {
+  display: block;
+}
+
+.search-filters-header {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.search-filters-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.filter-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s;
+  margin: 0;
+}
+
+.filter-checkbox:hover {
+  background: var(--bg-hover);
+}
+
+.filter-checkbox input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent-blue);
+  margin: 0;
+}
+
+/* ============ 统一资源选择项样式 ============ */
+.hover-bg {
+  transition: background-color var(--transition-fast);
+}
+.hover-bg:hover {
+  background-color: var(--bg-hover);
+}
+
+/* ============ 本地磁盘选择器侧边栏 ============ */
+.sidebar-picker {
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-picker-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+  border: 1px solid transparent;
+  gap: 8px;
+}
+.sidebar-picker-item:hover {
+  background-color: var(--bg-hover);
+}
+.sidebar-picker-item.active {
+  background-color: var(--bg-selected);
+  color: var(--accent-blue);
+  font-weight: 600;
+}
+.sidebar-picker-item i {
+  font-size: 14px;
+}
+.hover-primary:hover {
+  color: var(--accent-blue) !important;
 }

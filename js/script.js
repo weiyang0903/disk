@@ -5,6 +5,87 @@
 const API_ROOT = 'http://127.0.0.1:5000/api';
 
 // ===================================
+// 语言切换与国际化
+// ===================================
+let activeLang = localStorage.getItem('disk_lang') || 'zh-CN';
+
+function t(key, ...args) {
+  if (typeof TRANSLATIONS === 'undefined') return key;
+  const langDict = TRANSLATIONS[activeLang] || TRANSLATIONS['zh-CN'];
+  let val = langDict[key] !== undefined ? langDict[key] : (TRANSLATIONS['zh-CN'][key] !== undefined ? TRANSLATIONS['zh-CN'][key] : key);
+  if (args.length > 0) {
+    args.forEach((arg, index) => {
+      val = val.replace(new RegExp(`\\{${index}\\}`, 'g'), arg);
+    });
+  }
+  return val;
+}
+
+function setLanguage(lang) {
+  if (typeof TRANSLATIONS === 'undefined' || !TRANSLATIONS[lang]) return;
+  activeLang = lang;
+  localStorage.setItem('disk_lang', lang);
+
+  // 1. 翻译静态 DOM 属性
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.dataset.i18n;
+    const translation = t(key);
+    if (translation) {
+      const textNode = Array.from(el.childNodes).find(node => node.nodeType === Node.TEXT_NODE);
+      if (textNode) {
+        textNode.nodeValue = translation;
+      } else {
+        const spanNode = el.querySelector('span');
+        if (spanNode) {
+          spanNode.textContent = translation;
+        } else {
+          el.textContent = translation;
+        }
+      }
+    }
+  });
+
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    const key = el.dataset.i18nPlaceholder;
+    el.placeholder = t(key);
+  });
+
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    const key = el.dataset.i18nTitle;
+    el.title = t(key);
+  });
+
+  // 2. 翻译网页 Title
+  document.title = t('appName');
+
+  // 3. 更新 UI
+  updateLanguageDropdownActiveState();
+  updateBreadcrumb();
+  
+  // 重新加载统计面板（因为包含了需要翻译的数据）
+  updateStats().catch(err => console.error(err));
+
+  // 刷新当前面包屑与搜索框输入提示
+  const searchInput = document.getElementById('searchInput');
+  if (searchInput) searchInput.placeholder = t('searchPlaceholder');
+  
+  // 刷新当前文件夹详情渲染
+  if (selectedItem) {
+    showItemDetails(selectedItem);
+  }
+}
+
+function updateLanguageDropdownActiveState() {
+  document.querySelectorAll('.lang-option').forEach(el => {
+    if (el.dataset.lang === activeLang) {
+      el.classList.add('active');
+    } else {
+      el.classList.remove('active');
+    }
+  });
+}
+
+// ===================================
 // 全局状态
 // ===================================
 let currentFolder = null;
@@ -16,6 +97,8 @@ let viewMode = 'list';
 let navigationHistory = [];
 let historyIndex = -1;
 let contextMenuItem = null;
+let expandedFolderIds = new Set(['root']);
+let localImportTargetFolder = null; // 批量导入的目标文件夹
 
 // 分页状态（当前文件夹视图）
 const PAGE_LIMIT = 200;
@@ -48,6 +131,7 @@ document.addEventListener('DOMContentLoaded', () => {
   createContextMenu();
   setupContextMenuHandlers();
   initAddressBar();
+  setLanguage(activeLang); // 初始化语言
 });
 
 function initializeUI() {
@@ -60,6 +144,34 @@ function initializeUI() {
   document.getElementById('viewListBtn').addEventListener('click', () => switchView('list'));
   
   document.getElementById('searchInput').addEventListener('input', handleSearch);
+  
+  // 绑定搜索筛选框变更事件
+  document.querySelectorAll('#searchFilters input[type="checkbox"]').forEach(checkbox => {
+    checkbox.addEventListener('change', () => {
+      const searchInput = document.getElementById('searchInput');
+      if (searchInput && searchInput.value.trim()) {
+        triggerSearch(searchInput.value, true);
+      }
+    });
+  });
+  
+  // 绑定高级搜索面板展开折叠事件
+  const filterBtn = document.getElementById('searchFilterBtn');
+  const filtersDropdown = document.getElementById('searchFilters');
+  if (filterBtn && filtersDropdown) {
+    filterBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      filtersDropdown.classList.toggle('show');
+      filterBtn.classList.toggle('active');
+    });
+    
+    document.addEventListener('click', (e) => {
+      if (!filtersDropdown.contains(e.target) && e.target !== filterBtn && !filterBtn.contains(e.target)) {
+        filtersDropdown.classList.remove('show');
+        filterBtn.classList.remove('active');
+      }
+    });
+  }
   
   document.getElementById('newFolderBtn').addEventListener('click', () => openModal('folder'));
   document.getElementById('newFileBtn').addEventListener('click', () => openModal('file'));
@@ -116,17 +228,105 @@ function initializeUI() {
   });
 
   document.getElementById('localImportBtn').addEventListener('click', openLocalImportModal);
-  document.getElementById('localImportAddFolderBtn').addEventListener('click', () => {
-    handleLocalDirectoryPick();
+  document.getElementById('localImportSelectCombinedBtn').addEventListener('click', () => {
+    openLocalPickerModal();
   });
-  document.getElementById('localImportAddFileBtn').addEventListener('click', () => {
-    document.getElementById('localFileInput').click();
-  });
-  document.getElementById('localDirectoryInput').addEventListener('change', handleLocalDirectorySelection);
-  document.getElementById('localFileInput').addEventListener('change', handleLocalFileSelection);
   document.getElementById('localImportResetBtn').addEventListener('click', () => resetLocalImportUI(true));
   document.getElementById('localImportStartBtn').addEventListener('click', startLocalImport);
-  document.getElementById('localImportModal').addEventListener('hidden.bs.modal', () => resetLocalImportUI(true));
+
+  // 本地磁盘浏览器事件绑定
+  document.getElementById('localPickerUpBtn').addEventListener('click', (e) => {
+    const parentPath = e.currentTarget.dataset.parent || '';
+    loadLocalPickerDirectory(parentPath);
+  });
+  document.getElementById('localPickerPathInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      loadLocalPickerDirectory(e.target.value.trim());
+    }
+  });
+  document.getElementById('localPickerConfirmBtn').addEventListener('click', () => {
+    handleLocalPickerConfirm();
+  });
+  const pickerSelectAllCheckbox = document.getElementById('localPickerSelectAll');
+  if (pickerSelectAllCheckbox) {
+    pickerSelectAllCheckbox.addEventListener('change', (e) => {
+      const checked = e.target.checked;
+      document.querySelectorAll('.local-picker-item-checkbox').forEach(cb => {
+        cb.checked = checked;
+      });
+      updateLocalPickerSelectionCount();
+    });
+  }
+  
+  const importModalEl = document.getElementById('localImportModal');
+  if (importModalEl) {
+    importModalEl.addEventListener('hidden.bs.modal', () => resetLocalImportUI(true));
+    importModalEl.addEventListener('dragover', (e) => {
+      if (isExternalDrag(e)) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        const modalContent = importModalEl.querySelector('.modal-content');
+        if (modalContent) modalContent.classList.add('drag-over');
+      }
+    });
+    importModalEl.addEventListener('dragleave', (e) => {
+      const modalContent = importModalEl.querySelector('.modal-content');
+      if (modalContent && (e.relatedTarget === null || !modalContent.contains(e.relatedTarget))) {
+        modalContent.classList.remove('drag-over');
+      }
+    });
+    importModalEl.addEventListener('drop', (e) => {
+      if (isExternalDrag(e)) {
+        const modalContent = importModalEl.querySelector('.modal-content');
+        if (modalContent) modalContent.classList.remove('drag-over');
+        handleExternalDrop(e, localImportTargetFolder || currentFolder, true);
+      }
+    });
+  }
+
+  // 绑定语言选择
+  document.querySelectorAll('.lang-option').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      const lang = e.currentTarget.dataset.lang;
+      setLanguage(lang);
+    });
+  });
+
+  // 绑定全局外部文件拖拽到主内容区
+  const contentArea = document.querySelector('.content-area');
+  if (contentArea) {
+    contentArea.addEventListener('dragover', (e) => {
+      if (isExternalDrag(e)) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        contentArea.classList.add('drag-over');
+      }
+    });
+    contentArea.addEventListener('dragleave', (e) => {
+      if (e.relatedTarget === null || !contentArea.contains(e.relatedTarget)) {
+        contentArea.classList.remove('drag-over');
+      }
+    });
+    contentArea.addEventListener('drop', (e) => {
+      if (isExternalDrag(e)) {
+        contentArea.classList.remove('drag-over');
+        handleExternalDrop(e, currentFolder);
+      }
+    });
+  }
+
+  // 阻止浏览器默认的拖放打开文件行为
+  window.addEventListener('dragover', (e) => {
+    if (isExternalDrag(e)) {
+      e.preventDefault();
+    }
+  }, false);
+  window.addEventListener('drop', (e) => {
+    if (isExternalDrag(e)) {
+      e.preventDefault();
+    }
+  }, false);
 
   // 侧边栏拖拽调整
   initSidebarResize();
@@ -812,9 +1012,32 @@ async function loadAllData() {
     allFolders = await foldersResp.json();
     allItems = allFolders; // 保持向后兼容（其他функции通过 allItems 查找文件夹）
 
+    // —— Restore folder from URL on first load ——
+    if (currentFolder === null) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const folderIdParam = urlParams.get('folder_id');
+      if (folderIdParam) {
+        const targetId = parseInt(folderIdParam, 10);
+        const found = allFolders.find(f => f.id === targetId);
+        if (found) {
+          currentFolder = found;
+          // Expand ancestors of the restored folder
+          let temp = found;
+          while (temp) {
+            if (temp.parent_id) {
+              expandedFolderIds.add(temp.parent_id);
+              temp = allFolders.find(i => i.id === temp.parent_id) || null;
+            } else {
+              break;
+            }
+          }
+        }
+      }
+    }
+
     // 2. 刷新当前文件夹的条目缓存（清除旧缓存再重新加载）
+    itemCache.clear();
     const parentKey = currentFolder ? currentFolder.id : null;
-    itemCache.delete(parentKey);
     await ensureFolderLoaded(parentKey, currentViewPage);
 
     syncClientStateAfterDataRefresh();
@@ -928,48 +1151,173 @@ function syncClientStateAfterDataRefresh() {
 // ===================================
 // 左侧文件夹树构建（显示文件夹和文件）
 // ===================================
+// 树和面包屑拖拽接收逻辑
+// ===================================
+function handleTreeOrBreadcrumbDragOver(e, targetFolder) {
+  if (isExternalDrag(e)) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    e.currentTarget.classList.add('drag-over');
+    return;
+  }
+  if (draggedItem) {
+    const targetId = targetFolder ? targetFolder.id : null;
+    const sourceId = draggedItem.id;
+    const sourceParentId = draggedItem.parent_id ?? null;
+    
+    // 不能拖到自己
+    if (sourceId === targetId) return;
+    // 不能拖到当前父目录（无意义）
+    if (sourceParentId === targetId) return;
+    // 不能拖到子孙目录（循环引用）
+    if (targetFolder && wouldCreateCircularReference(draggedItem, targetFolder)) return;
+    
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    e.currentTarget.classList.add('drag-over');
+  }
+}
+
+function handleTreeOrBreadcrumbDragLeave(e) {
+  e.currentTarget.classList.remove('drag-over');
+}
+
+async function handleTreeOrBreadcrumbDrop(e, targetFolder) {
+  e.preventDefault();
+  e.stopPropagation();
+  e.currentTarget.classList.remove('drag-over');
+  
+  if (isExternalDrag(e)) {
+    handleExternalDrop(e, targetFolder);
+    return;
+  }
+  
+  if (draggedItem) {
+    const targetId = targetFolder ? targetFolder.id : null;
+    const sourceItem = draggedItem;
+    const sourceName = sourceItem ? sourceItem.name : '选中项';
+    const targetName = targetFolder ? targetFolder.name : t('thisPC');
+    
+    if (sourceItem.id === targetId) return;
+    if ((sourceItem.parent_id ?? null) === targetId) return;
+    if (targetFolder && wouldCreateCircularReference(sourceItem, targetFolder)) {
+      showToast(t('alertMoveCircular'), 'danger');
+      return;
+    }
+    
+    try {
+      const response = await fetch(`${API_ROOT}/items/${sourceItem.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parent_id: targetId })
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        showToast(t('alertMoveFailed', errorData.error || '服务器错误'), 'danger');
+        return;
+      }
+      
+      showToast(t('alertMoveSuccess', sourceName, targetName), 'success');
+      draggedItem = null;
+      loadAllData().catch(err => {
+        console.error('重新加载数据失败:', err);
+      });
+    } catch (error) {
+      console.error('移动错误:', error);
+      showToast(t('alertMoveFailed', '网络错误'), 'danger');
+    }
+  }
+}
+
 function buildFolderTree() {
   const treeContainer = document.getElementById('folderTree');
+  if (!treeContainer) return;
   treeContainer.innerHTML = '';
   
+  // 建立父子关系索引，大幅提升性能 (O(N) 复杂度)
+  const childrenMap = new Map();
+  allFolders.forEach(folder => {
+    const pid = folder.parent_id ?? null;
+    if (!childrenMap.has(pid)) {
+      childrenMap.set(pid, []);
+    }
+    childrenMap.get(pid).push(folder);
+  });
+  
+  // 查找当前选中文件夹的所有祖先，保持其展开状态
+  const activeFolderAncestors = new Set();
+  let temp = currentFolder;
+  while (temp) {
+    if (temp.parent_id) {
+      activeFolderAncestors.add(temp.parent_id);
+      temp = allFolders.find(i => i.id === temp.parent_id) || null;
+    } else {
+      break;
+    }
+  }
+  
   // 添加"此电脑"根节点
+  const isRootExpanded = expandedFolderIds.has('root');
   const rootNode = document.createElement('div');
-  rootNode.className = 'tree-item' + (!currentFolder ? ' selected' : '');
-  rootNode.innerHTML = `
-    <span class="tree-icon"></span>
-    <div class="tree-name">
-      <i class="fas fa-desktop text-primary"></i>
-      <span>此电脑</span>
-    </div>
-  `;
+  rootNode.className = 'tree-item' + (!currentFolder ? ' selected' : '') + (isRootExpanded ? ' expanded' : '');
+  
+  const rootIcon = document.createElement('span');
+  rootIcon.className = 'tree-icon';
+  rootNode.appendChild(rootIcon);
+  
+  rootIcon.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (expandedFolderIds.has('root')) {
+      expandedFolderIds.delete('root');
+    } else {
+      expandedFolderIds.add('root');
+    }
+    buildFolderTree();
+  });
+  
+  const rootNameDiv = document.createElement('div');
+  rootNameDiv.className = 'tree-name';
+  rootNameDiv.innerHTML = `<i class="fas fa-desktop text-primary"></i><span>此电脑</span>`;
+  rootNode.appendChild(rootNameDiv);
+  
   rootNode.addEventListener('click', () => {
     navigateToFolder(null);
   });
   
+  // 根节点接收拖拽
+  rootNode.addEventListener('dragover', (e) => handleTreeOrBreadcrumbDragOver(e, null));
+  rootNode.addEventListener('dragleave', handleTreeOrBreadcrumbDragLeave);
+  rootNode.addEventListener('drop', (e) => handleTreeOrBreadcrumbDrop(e, null));
+  
   const rootWrapper = document.createElement('div');
   rootWrapper.appendChild(rootNode);
   
-  // 添加根级别的内容
-  const rootChildren = document.createElement('div');
-  rootChildren.className = 'tree-children';
-  rootChildren.style.display = 'block';
+  if (isRootExpanded) {
+    const rootChildren = document.createElement('div');
+    rootChildren.className = 'tree-children';
+    rootChildren.style.display = 'block';
+    
+    const rootFolders = childrenMap.get(null) || [];
+    rootFolders.forEach((item, index) => {
+      rootChildren.appendChild(createTreeNode(item, index + 1, childrenMap, activeFolderAncestors));
+    });
+    
+    rootWrapper.appendChild(rootChildren);
+  }
   
-  const rootFolders = allFolders.filter(item => !item.parent_id);
-  // 为根级别项目添加编号
-  rootFolders.forEach((item, index) => {
-    rootChildren.appendChild(createTreeNode(item, index + 1));
-  });
-  
-  rootWrapper.appendChild(rootChildren);
   treeContainer.appendChild(rootWrapper);
 }
 
-function createTreeNode(item, index = null) {
+function createTreeNode(item, index = null, childrenMap = new Map(), activeFolderAncestors = new Set()) {
   const isFolder = item.type === 'folder';
-  const hasChildren = allFolders.some(child => child.parent_id === item.id);
+  const childFolders = childrenMap.get(item.id) || [];
+  const hasChildren = childFolders.length > 0;
+  
+  const isExpanded = expandedFolderIds.has(item.id) || activeFolderAncestors.has(item.id);
   
   const itemDiv = document.createElement('div');
-  itemDiv.className = 'tree-item' + (currentFolder && currentFolder.id === item.id ? ' selected' : '');
+  itemDiv.className = 'tree-item' + (currentFolder && currentFolder.id === item.id ? ' selected' : '') + (isFolder && hasChildren && isExpanded ? ' expanded' : '');
   itemDiv.dataset.id = item.id;
   
   if (isFolder && hasChildren) {
@@ -979,7 +1327,13 @@ function createTreeNode(item, index = null) {
     
     icon.addEventListener('click', (e) => {
       e.stopPropagation();
-      toggleTreeNode(itemDiv);
+      if (expandedFolderIds.has(item.id)) {
+        expandedFolderIds.delete(item.id);
+        activeFolderAncestors.delete(item.id); // 允许用户折叠
+      } else {
+        expandedFolderIds.add(item.id);
+      }
+      buildFolderTree();
     });
   } else {
     const spacer = document.createElement('span');
@@ -993,7 +1347,6 @@ function createTreeNode(item, index = null) {
   const iconClass = getItemIcon(item);
   const iconColor = getIconColor(item);
   const label = item.type === 'file' ? getDisplayName(item) : item.name;
-  // 添加编号显示（放在图标前面）
   const numberPrefix = index !== null ? `<span class="item-number">#${index}</span>` : '';
   nameDiv.innerHTML = `${numberPrefix}<i class="${iconClass} ${iconColor}"></i><span>${escapeHtml(label)}</span>`;
   itemDiv.appendChild(nameDiv);
@@ -1002,7 +1355,6 @@ function createTreeNode(item, index = null) {
     if (isFolder) {
       navigateToFolder(item);
     } else {
-      // 如果是文件，导航到其父文件夹并选中该文件
       const parent = item.parent_id ? allFolders.find(i => i.id === item.parent_id) : null;
       navigateToFolder(parent);
       setTimeout(() => {
@@ -1015,17 +1367,25 @@ function createTreeNode(item, index = null) {
     }
   });
   
+  // 树节点支持拖拽
+  itemDiv.draggable = true;
+  itemDiv.addEventListener('dragstart', (e) => handleDragStart(e, item));
+  itemDiv.addEventListener('dragover', (e) => handleTreeOrBreadcrumbDragOver(e, item));
+  itemDiv.addEventListener('dragleave', handleTreeOrBreadcrumbDragLeave);
+  itemDiv.addEventListener('drop', (e) => handleTreeOrBreadcrumbDrop(e, item));
+  itemDiv.addEventListener('dragend', (e) => handleDragEnd(e));
+  
   const wrapper = document.createElement('div');
   wrapper.appendChild(itemDiv);
   
-  if (isFolder && hasChildren) {
+  // 仅在父节点展开时，才渲染其子节点 DOM (懒加载 / 性能关键优化)
+  if (isFolder && hasChildren && isExpanded) {
     const childrenDiv = document.createElement('div');
     childrenDiv.className = 'tree-children';
+    childrenDiv.style.display = 'block';
     
-    const children = allFolders.filter(child => child.parent_id === item.id);
-    // 为子项添加编号
-    children.forEach((child, idx) => {
-      childrenDiv.appendChild(createTreeNode(child, idx + 1));
+    childFolders.forEach((child, idx) => {
+      childrenDiv.appendChild(createTreeNode(child, idx + 1, childrenMap, activeFolderAncestors));
     });
     
     wrapper.appendChild(childrenDiv);
@@ -1152,6 +1512,16 @@ function updateNavigationButtons() {
 // ===================================
 function displayCurrentFolder() {
   updateBreadcrumb();
+  
+  // 刷新 URL 参数
+  const url = new URL(window.location.href);
+  if (currentFolder) {
+    url.searchParams.set('folder_id', currentFolder.id);
+  } else {
+    url.searchParams.delete('folder_id');
+  }
+  window.history.replaceState(null, '', url.toString());
+
   const entry = getCurrentCacheEntry();
   const items = entry.items || [];
 
@@ -1189,12 +1559,12 @@ function renderPaginationBar(page, totalPages, total, gotoFn = 'gotoViewPage') {
 
   if (totalPages <= 1) {
     bar.innerHTML = total > 0
-      ? `<span class="pg-info">共 ${total} 项</span>`
+      ? `<span class="pg-info">${t('totalItems', total)}</span>`
       : '';
     return;
   }
 
-  let html = `<span class="pg-info">共 ${total} 项 &nbsp;&bull;&nbsp; 第 ${page}/${totalPages} 页</span>
+  let html = `<span class="pg-info">${t('paginationInfo', total, page, totalPages)}</span>
     <div class="pg-controls">`;
 
   html += `<button class="pg-btn" ${page <= 1 ? 'disabled' : ''} onclick="${gotoFn}(1)">
@@ -1238,7 +1608,8 @@ async function gotoSearchPage(page) {
   if (page < 1 || page > currentSearchTotalPages || page === currentSearchPage) return;
   currentSearchPage = page;
   try {
-    const resp = await fetch(`${API_ROOT}/search?q=${encodeURIComponent(currentSearchQuery)}&page=${page}&limit=200`);
+    const fields = getSelectedSearchFields();
+    const resp = await fetch(`${API_ROOT}/search?q=${encodeURIComponent(currentSearchQuery)}&fields=${fields.join(',')}&page=${page}&limit=200`);
     const data = await resp.json();
     const results = Array.isArray(data) ? data : (data.items || []);
     const total = data.total ?? results.length;
@@ -1267,6 +1638,7 @@ async function gotoSearchPage(page) {
 
 function updateBreadcrumb() {
   const breadcrumb = document.getElementById('breadcrumb');
+  if (!breadcrumb) return;
   breadcrumb.innerHTML = '';
   const path = [];
   let current = currentFolder;
@@ -1279,6 +1651,12 @@ function updateBreadcrumb() {
   rootSpan.className = 'breadcrumb-item' + (!currentFolder ? ' active' : '');
   rootSpan.textContent = '此电脑';
   rootSpan.addEventListener('click', () => navigateToFolder(null));
+  
+  // 根级别面包屑接收拖拽
+  rootSpan.addEventListener('dragover', (e) => handleTreeOrBreadcrumbDragOver(e, null));
+  rootSpan.addEventListener('dragleave', handleTreeOrBreadcrumbDragLeave);
+  rootSpan.addEventListener('drop', (e) => handleTreeOrBreadcrumbDrop(e, null));
+  
   breadcrumb.appendChild(rootSpan);
 
   path.forEach((folder, index) => {
@@ -1286,6 +1664,12 @@ function updateBreadcrumb() {
     span.className = 'breadcrumb-item' + (index === path.length - 1 ? ' active' : '');
     span.textContent = folder.name;
     span.addEventListener('click', () => navigateToFolder(folder));
+    
+    // 面包屑节点接收拖拽
+    span.addEventListener('dragover', (e) => handleTreeOrBreadcrumbDragOver(e, folder));
+    span.addEventListener('dragleave', handleTreeOrBreadcrumbDragLeave);
+    span.addEventListener('drop', (e) => handleTreeOrBreadcrumbDrop(e, folder));
+    
     breadcrumb.appendChild(span);
   });
 }
@@ -1428,6 +1812,14 @@ function handleDragStart(e, item) {
 }
 
 function handleDragOver(e, item) {
+  if (isExternalDrag(e)) {
+    if (item.type === 'folder') {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      e.currentTarget.classList.add('drag-over');
+    }
+    return;
+  }
   if (draggedItem && item.type === 'folder' && draggedItem.id !== item.id) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
@@ -1443,6 +1835,12 @@ async function handleDrop(e, targetItem) {
   e.preventDefault();
   e.stopPropagation();
   e.currentTarget.classList.remove('drag-over');
+  
+  if (isExternalDrag(e)) {
+    const targetFolder = targetItem.type === 'folder' ? targetItem : currentFolder;
+    handleExternalDrop(e, targetFolder);
+    return;
+  }
   
   if (draggedItem && targetItem.type === 'folder' && draggedItem.id !== targetItem.id) {
     // 在异步操作前保留引用，避免 dragend 事件提前清空状态
@@ -1534,9 +1932,20 @@ function showItemDetails(item) {
   if (item.type === 'file' && item.file_size) {
     html += `<div class="detail-field"><label>文件大小</label><div class="value">${formatFileSize(item.file_size)}</div></div>`;
   }
+  
+  // 增加"总大小"字段用于文件夹递归计算
+  if (item.type === 'folder') {
+    html += `<div class="detail-field" id="detailTotalSizeField"><label>总大小</label><div class="value" id="detailTotalSizeValue"><i class="fas fa-spinner fa-spin me-1"></i>计算中...</div></div>`;
+  }
+  
   html += `<div class="detail-field"><label>硬盘管理路径</label><div class="value">${escapeHtml(managementPath)}</div></div>`;
   html += `<div class="detail-field"><label>位置</label><div class="value ${item.location ? '' : 'empty'}">${locationHtml}</div></div>`;
   html += `<div class="detail-field"><label>描述</label><div class="value ${item.description ? '' : 'empty'}">${descriptionHtml}</div></div>`;
+  
+  if (item.updated_at) {
+    html += `<div class="detail-field"><label>修改日期</label><div class="value">${escapeHtml(item.updated_at)}</div></div>`;
+  }
+
   if (item.type === 'folder') {
     // 使用已缓存的子项（如果该文件夹已加载过）
     const cachedEntry = itemCache.get(item.id);
@@ -1555,6 +1964,56 @@ function showItemDetails(item) {
   }
   html += `<div class="detail-actions"><button class="btn btn-sm btn-primary" onclick="editItem()"><i class="fas fa-edit"></i> 编辑</button><button class="btn btn-sm btn-danger" onclick="deleteItem()"><i class="fas fa-trash"></i> 删除</button></div>`;
   detailsContent.innerHTML = html;
+
+  // 异步加载最新属性
+  fetch(`${API_ROOT}/items/${item.id}`)
+    .then(res => {
+      if (res.ok) return res.json();
+      throw new Error('Details fetch failed');
+    })
+    .then(data => {
+      if (selectedItem && selectedItem.id === item.id) {
+        selectedItem.updated_at = data.updated_at;
+        
+        // 更新总大小
+        const sizeVal = document.getElementById('detailTotalSizeValue');
+        if (sizeVal) {
+          sizeVal.textContent = data.total_size_display || '0 B';
+        }
+        
+        // 更新修改日期
+        if (data.updated_at) {
+          let hasDateField = false;
+          const fields = detailsContent.querySelectorAll('.detail-field');
+          fields.forEach(f => {
+            const label = f.querySelector('label');
+            if (label && label.textContent === '修改日期') {
+              hasDateField = true;
+              f.querySelector('.value').textContent = data.updated_at;
+            }
+          });
+          
+          if (!hasDateField) {
+            const dateDiv = document.createElement('div');
+            dateDiv.className = 'detail-field';
+            dateDiv.innerHTML = `<label>修改日期</label><div class="value">${escapeHtml(data.updated_at)}</div>`;
+            const actionsDiv = detailsContent.querySelector('.detail-actions');
+            if (actionsDiv) {
+              detailsContent.insertBefore(dateDiv, actionsDiv);
+            } else {
+              detailsContent.appendChild(dateDiv);
+            }
+          }
+        }
+      }
+    })
+    .catch(err => {
+      console.warn('获取详情失败:', err);
+      const sizeVal = document.getElementById('detailTotalSizeValue');
+      if (sizeVal) {
+        sizeVal.textContent = '计算失败';
+      }
+    });
 }
 
 function closeDetailsPanel() {
@@ -1604,7 +2063,8 @@ function triggerSearch(rawValue, immediate = false) {
     }
 
     try {
-      const resp = await fetch(`${API_ROOT}/search?q=${encodeURIComponent(trimmed)}&page=1&limit=200`);
+      const fields = getSelectedSearchFields();
+      const resp = await fetch(`${API_ROOT}/search?q=${encodeURIComponent(trimmed)}&fields=${fields.join(',')}&page=1&limit=200`);
       const data = await resp.json();
       const results = Array.isArray(data) ? data : (data.items || []);
       const total = data.total ?? results.length;
@@ -1649,6 +2109,16 @@ function triggerSearch(rawValue, immediate = false) {
   return undefined;
 }
 
+function getSelectedSearchFields() {
+  const fields = [];
+  if (document.getElementById('searchName')?.checked) fields.push('name');
+  if (document.getElementById('searchDate')?.checked) fields.push('date');
+  if (document.getElementById('searchPath')?.checked) fields.push('path');
+  if (document.getElementById('searchDesc')?.checked) fields.push('desc');
+  if (document.getElementById('searchFormat')?.checked) fields.push('format');
+  return fields;
+}
+
 function reapplyActiveSearch() {
   const searchInput = document.getElementById('searchInput');
   if (!searchInput) {
@@ -1684,11 +2154,11 @@ function openModal(type, editMode = false) {
     document.getElementById('itemFormat').value = selectedItem.format || '';
     document.getElementById('itemFileSize').value = selectedItem.file_size || '';
     defaultParentId = selectedItem.parent_id ?? null;
-    document.getElementById('modalTitleText').textContent = '编辑' + (type === 'folder' ? '文件夹' : '文件');
+    document.getElementById('modalTitleText').textContent = type === 'folder' ? t('modalTitleEditFolder') : t('modalTitleEditFile');
   } else {
     document.getElementById('itemId').value = '';
     document.getElementById('itemFileSize').value = '';
-    document.getElementById('modalTitleText').textContent = '新建' + (type === 'folder' ? '文件夹' : '文件');
+    document.getElementById('modalTitleText').textContent = type === 'folder' ? t('modalTitleNewFolder') : t('modalTitleNewFile');
     
     // 设置默认描述
     if (type === 'file') {
@@ -1710,7 +2180,7 @@ function openModal(type, editMode = false) {
 function populateParentSelect(defaultParentId = null) {
   const select = document.getElementById('parentSelect');
   const currentId = document.getElementById('itemId').value;
-  select.innerHTML = '<option value="">根目录</option>';
+  select.innerHTML = `<option value="">${t('formParentRoot')}</option>`;
   const folders = allFolders.filter(item => item.id != currentId);
   folders.forEach(folder => {
     const option = document.createElement('option');
@@ -2290,7 +2760,7 @@ async function updateStats() {
     const sizedCount   = document.getElementById('sizedFileCount');
     const sizeByFormat = document.getElementById('sizeByFormat');
     if (sizeDisplay) sizeDisplay.textContent = stats.total_size_display || '0 B';
-    if (sizedCount)  sizedCount.textContent  = `已记录 ${stats.sized_file_count || 0} 个文件大小`;
+    if (sizedCount)  sizedCount.textContent  = t('recordedSizes', stats.sized_file_count || 0);
 
     if (sizeByFormat && stats.size_by_format) {
       const entries = Object.entries(stats.size_by_format);
@@ -2305,7 +2775,7 @@ async function updateStats() {
           </div>`;
         }).join('');
       } else {
-        sizeByFormat.innerHTML = '<div class="text-muted" style="font-size:11px;">暂无大小数据</div>';
+        sizeByFormat.innerHTML = `<div class="text-muted" style="font-size:11px;">${t('noSizeData')}</div>`;
       }
     }
   } catch (e) {
@@ -2316,8 +2786,9 @@ async function updateStats() {
 // ===================================
 // 本地批量导入
 // ===================================
-function openLocalImportModal() {
+function openLocalImportModal(targetFolder = currentFolder) {
   hideContextMenu();
+  localImportTargetFolder = targetFolder;
   if (!localImportModalInstance) {
     localImportModalInstance = new bootstrap.Modal(document.getElementById('localImportModal'));
   }
@@ -2360,7 +2831,7 @@ function resetLocalImportUI(clearSelections = false) {
     confirmBtn.disabled = false;
   }
   if (statusEl) {
-    statusEl.textContent = '正在准备导入...';
+    statusEl.textContent = t('preparingImport');
     statusEl.classList.remove('text-danger');
   }
   if (detailEl) detailEl.textContent = '';
@@ -2371,25 +2842,283 @@ function resetLocalImportUI(clearSelections = false) {
   if (closeBtn) closeBtn.style.display = '';
 
   const startBtn = document.getElementById('localImportStartBtn');
-  const addFolderBtn = document.getElementById('localImportAddFolderBtn');
-  const addFileBtn = document.getElementById('localImportAddFileBtn');
+  const selectCombinedBtn = document.getElementById('localImportSelectCombinedBtn');
   const resetBtn = document.getElementById('localImportResetBtn');
-  [startBtn, addFolderBtn, addFileBtn, resetBtn].forEach(btn => {
+  [startBtn, selectCombinedBtn, resetBtn].forEach(btn => {
     if (btn) btn.disabled = false;
   });
+
+  // 显示导入的目标路径
+  const targetDisplayEl = document.getElementById('localImportTargetDisplay');
+  if (targetDisplayEl) {
+    if (localImportTargetFolder) {
+      const pathStr = getManagementPath(localImportTargetFolder);
+      const locStr = localImportTargetFolder.location ? ` (${localImportTargetFolder.location})` : '';
+      targetDisplayEl.textContent = pathStr + locStr;
+    } else {
+      targetDisplayEl.textContent = `/${t('thisPC')}`;
+    }
+  }
 
   updateLocalImportSummary();
 }
 
 function updateLocalImportSummary() {
   const { folders, files } = computePreparedEntries();
-  const folderCountEl = document.getElementById('localImportFolderCount');
-  const fileCountEl = document.getElementById('localImportFileCount');
-  if (folderCountEl) folderCountEl.textContent = folders.length;
-  if (fileCountEl) fileCountEl.textContent = files.length;
+  const listEl = document.getElementById('localImportSelectedItemsList');
+  const noneTextEl = document.getElementById('localImportNoneSelectedText');
+  const countBadgeEl = document.getElementById('localImportTotalCountBadge');
+
+  const totalCount = folders.length + files.length;
+  if (countBadgeEl) countBadgeEl.textContent = totalCount;
 
   const startBtn = document.getElementById('localImportStartBtn');
-  if (startBtn) startBtn.disabled = folders.length === 0 && files.length === 0;
+  if (startBtn) startBtn.disabled = totalCount === 0;
+
+  if (!listEl) return;
+
+  // 清空现有项
+  listEl.innerHTML = '';
+
+  if (totalCount === 0) {
+    if (noneTextEl) {
+      listEl.appendChild(noneTextEl);
+      noneTextEl.style.display = 'block';
+    } else {
+      listEl.innerHTML = `<div class="text-center text-muted py-4" id="localImportNoneSelectedText">${t('selectedNone')}</div>`;
+    }
+    return;
+  }
+
+  const renderItem = (name, isFolder, typeExtension = null, onRemove) => {
+    const row = document.createElement('div');
+    row.className = 'd-flex justify-content-between align-items-center mb-1 py-1 px-2 rounded hover-bg';
+    row.style.fontSize = '13px';
+    row.style.borderBottom = '1px solid rgba(0, 0, 0, 0.03)';
+
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'd-inline-flex align-items-center';
+    
+    const icon = document.createElement('i');
+    if (isFolder) {
+      icon.className = 'fas fa-folder text-warning me-2';
+    } else {
+      const dummyItem = { type: 'file', format: typeExtension };
+      icon.className = getItemIcon(dummyItem) + ' ' + getIconColor(dummyItem) + ' me-2';
+    }
+
+    iconSpan.appendChild(icon);
+    
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = name;
+    nameSpan.className = 'text-truncate d-inline-block';
+    nameSpan.style.maxWidth = '300px';
+    nameSpan.title = name;
+    iconSpan.appendChild(nameSpan);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn btn-sm text-danger p-0 border-0 bg-transparent';
+    removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+    removeBtn.style.fontSize = '12px';
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onRemove();
+    });
+
+    row.appendChild(iconSpan);
+    row.appendChild(removeBtn);
+    return row;
+  };
+
+  // 渲染文件夹
+  folders.forEach((folder) => {
+    listEl.appendChild(renderItem(folder.name, true, null, () => removeLocalImportFolder(folder.path)));
+  });
+
+  // 渲染文件
+  files.forEach((fileEntry) => {
+    listEl.appendChild(renderItem(fileEntry.fileName, false, getFileExtension(fileEntry.fileName), () => removeLocalImportFile(fileEntry)));
+  });
+}
+
+function removeLocalImportFolder(folderPath) {
+  // 1. 从 fsFolders 和 fsFiles 中移除
+  if (localImportState.fsFolders.has(folderPath)) {
+    localImportState.fsFolders.delete(folderPath);
+    for (const [p] of localImportState.fsFolders) {
+      if (p === folderPath || p.startsWith(folderPath + '/')) {
+        localImportState.fsFolders.delete(p);
+      }
+    }
+    for (const [key, entry] of localImportState.fsFiles) {
+      const fPath = entry.folderPath || '';
+      if (fPath === folderPath || fPath.startsWith(folderPath + '/')) {
+        localImportState.fsFiles.delete(key);
+      }
+    }
+  }
+
+  // 2. 从 directoryFiles 中过滤
+  localImportState.directoryFiles = localImportState.directoryFiles.filter(file => {
+    const relPath = file.webkitRelativePath || file.name;
+    const parts = relPath.split('/').filter(Boolean);
+    const folderSegments = folderPath.split('/').filter(Boolean);
+    const startsWith = folderSegments.every((seg, idx) => parts[idx] === seg);
+    if (startsWith) {
+      const key = `${relPath}|${file.size}|${file.lastModified}`;
+      localImportState.directoryKeys.delete(key);
+      return false;
+    }
+    return true;
+  });
+
+  updateLocalImportSummary();
+}
+
+function removeLocalImportFile(fileEntry) {
+  // 从 fsFiles 中移除
+  const folderPath = fileEntry.folderPath || '';
+  const key = `${folderPath}||${fileEntry.fileName}`;
+  if (localImportState.fsFiles.has(key)) {
+    localImportState.fsFiles.delete(key);
+  }
+
+  // 从 looseFiles / directoryFiles 中移除
+  if (fileEntry.file) {
+    const file = fileEntry.file;
+    const lIndex = localImportState.looseFiles.indexOf(file);
+    if (lIndex !== -1) {
+      localImportState.looseFiles.splice(lIndex, 1);
+      const lKey = `${file.name}|${file.size}|${file.lastModified}`;
+      localImportState.looseKeys.delete(lKey);
+    }
+    const dIndex = localImportState.directoryFiles.indexOf(file);
+    if (dIndex !== -1) {
+      localImportState.directoryFiles.splice(dIndex, 1);
+      const relPath = file.webkitRelativePath || file.name;
+      const dKey = `${relPath}|${file.size}|${file.lastModified}`;
+      localImportState.directoryKeys.delete(dKey);
+    }
+  }
+
+  updateLocalImportSummary();
+}
+
+function isExternalDrag(e) {
+  return e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('Files');
+}
+
+async function handleExternalDrop(e, targetFolder, append = false) {
+  e.preventDefault();
+  e.stopPropagation();
+
+  const items = e.dataTransfer.items;
+  if (!items || items.length === 0) return;
+
+  showToast(t('dropLoadingText'), 'info');
+
+  if (!append) {
+    resetLocalImportUI(true);
+    localImportTargetFolder = targetFolder;
+  } else if (!localImportTargetFolder) {
+    localImportTargetFolder = targetFolder;
+  }
+
+  const entriesToProcess = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind === 'file') {
+      const entry = item.webkitGetAsEntry();
+      if (entry) {
+        entriesToProcess.push(entry);
+      }
+    }
+  }
+
+  try {
+    for (const entry of entriesToProcess) {
+      await traverseFileEntry(entry, []);
+    }
+
+    updateLocalImportSummary();
+
+    const targetDisplayEl = document.getElementById('localImportTargetDisplay');
+    if (targetDisplayEl) {
+      if (localImportTargetFolder) {
+        const pathStr = getManagementPath(localImportTargetFolder);
+        const locStr = localImportTargetFolder.location ? ` (${localImportTargetFolder.location})` : '';
+        targetDisplayEl.textContent = pathStr + locStr;
+      } else {
+        targetDisplayEl.textContent = `/${t('thisPC')}`;
+      }
+    }
+
+    if (!localImportModalInstance) {
+      localImportModalInstance = new bootstrap.Modal(document.getElementById('localImportModal'));
+    }
+    localImportModalInstance.show();
+  } catch (err) {
+    console.error('读取拖放资源失败:', err);
+    showToast(t('dropErrorTitle') + ': ' + err.message, 'danger');
+  }
+}
+
+async function traverseFileEntry(entry, parentSegments = []) {
+  if (entry.isFile) {
+    const file = await new Promise((resolve, reject) => {
+      entry.file(resolve, reject);
+    });
+    if (parentSegments.length === 0) {
+      const key = `${file.name}|${file.size}|${file.lastModified}`;
+      if (!localImportState.looseKeys.has(key)) {
+        localImportState.looseFiles.push(file);
+        localImportState.looseKeys.add(key);
+      }
+    } else {
+      const folderPath = parentSegments.join('/');
+      const key = `${folderPath}||${entry.name}`;
+      if (!localImportState.fsFiles.has(key)) {
+        localImportState.fsFiles.set(key, {
+          file: file,
+          folderPath: folderPath,
+          fileName: entry.name,
+          relPath: [...parentSegments, entry.name].join('/')
+        });
+      }
+    }
+  } else if (entry.isDirectory) {
+    const currentSegments = [...parentSegments, entry.name];
+    const path = currentSegments.join('/');
+    const parentPath = parentSegments.join('/');
+
+    if (!localImportState.fsFolders.has(path)) {
+      localImportState.fsFolders.set(path, {
+        name: entry.name,
+        path,
+        parentPath,
+        depth: currentSegments.length
+      });
+    }
+
+    const dirReader = entry.createReader();
+    const readAllEntries = async () => {
+      let allEntries = [];
+      while (true) {
+        const entries = await new Promise((resolve, reject) => {
+          dirReader.readEntries(resolve, reject);
+        });
+        if (entries.length === 0) break;
+        allEntries.push(...entries);
+      }
+      return allEntries;
+    };
+
+    const entries = await readAllEntries();
+    for (const subEntry of entries) {
+      await traverseFileEntry(subEntry, currentSegments);
+    }
+  }
 }
 
 async function handleLocalDirectoryPick() {
@@ -2659,7 +3388,7 @@ async function startLocalImport() {
 
   try {
     for (const folder of folders) {
-      const parentId = folder.parentPath ? resolveParentIdFromPath(folder.parentPath, folderIdMap, virtualItems) : (currentFolder ? currentFolder.id : null);
+      const parentId = folder.parentPath ? resolveParentIdFromPath(folder.parentPath, folderIdMap, virtualItems) : (localImportTargetFolder ? localImportTargetFolder.id : null);
       const existing = findExistingItem(folder.name, parentId, 'folder', virtualItems);
       let folderId;
       let detailMessage;
@@ -2689,7 +3418,7 @@ async function startLocalImport() {
     }
 
     for (const item of files) {
-      const parentId = item.folderPath ? resolveParentIdFromPath(item.folderPath, folderIdMap, virtualItems) : (currentFolder ? currentFolder.id : null);
+      const parentId = item.folderPath ? resolveParentIdFromPath(item.folderPath, folderIdMap, virtualItems) : (localImportTargetFolder ? localImportTargetFolder.id : null);
       const fullFileName = item.fileName;
       const name = getFileNameWithoutExtension(fullFileName);
       const format = getFileExtension(fullFileName);
@@ -2856,10 +3585,10 @@ function findExistingItem(name, parentId, type, items, format = null) {
 }
 
 function resolveParentIdFromPath(path, folderIdMap, items) {
-  if (!path) return currentFolder ? currentFolder.id : null;
+  if (!path) return localImportTargetFolder ? localImportTargetFolder.id : null;
   const segments = path.split('/').filter(Boolean);
   let cumulative = '';
-  let parentId = currentFolder ? currentFolder.id : null;
+  let parentId = localImportTargetFolder ? localImportTargetFolder.id : null;
 
   for (const segment of segments) {
     cumulative = cumulative ? `${cumulative}/${segment}` : segment;
@@ -3197,4 +3926,225 @@ function showToast(message, type = 'info') {
     toast.classList.add('toast-hide');
     setTimeout(() => toast.remove(), 400);
   }, 3000);
+}
+
+// ===================================
+// 本地磁盘浏览器 (自定义多选)
+// ===================================
+let currentLocalPickerPath = '';
+let localPickerModalInstance = null;
+
+function openLocalPickerModal() {
+  if (!localPickerModalInstance) {
+    localPickerModalInstance = new bootstrap.Modal(document.getElementById('localPickerModal'));
+  }
+  localPickerModalInstance.show();
+  loadLocalPickerDirectory('');
+}
+
+async function loadLocalPickerDirectory(path) {
+  const listEl = document.getElementById('localPickerItemsList');
+  const pathInput = document.getElementById('localPickerPathInput');
+  const upBtn = document.getElementById('localPickerUpBtn');
+  const selectAllCheckbox = document.getElementById('localPickerSelectAll');
+  
+  if (selectAllCheckbox) selectAllCheckbox.checked = false;
+  if (listEl) listEl.innerHTML = '<tr><td colspan="4" class="text-center py-4"><div class="spinner-border spinner-border-sm text-primary" role="status"></div> Loading...</td></tr>';
+  
+  try {
+    const response = await fetch(`${API_ROOT}/local/list?path=${encodeURIComponent(path)}`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || '无法读取该目录');
+    }
+    const data = await response.json();
+    currentLocalPickerPath = data.current_path;
+    
+    if (pathInput) pathInput.value = currentLocalPickerPath;
+    
+    if (upBtn) {
+      upBtn.dataset.parent = data.parent_path;
+      upBtn.disabled = data.current_path === '' || data.parent_path === undefined;
+    }
+    
+    // 渲染左侧驱动器列表
+    await populateSidebarDrives();
+
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    
+    // 更新共 N 个项目状态
+    const statusInfo = document.getElementById('localPickerStatusInfo');
+    if (statusInfo) {
+      statusInfo.textContent = t('totalItems', data.items.length);
+    }
+    
+    // 更新选择数状态为 0
+    updateLocalPickerSelectionCount();
+    
+    if (data.items.length === 0) {
+      listEl.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">空目录</td></tr>';
+      return;
+    }
+    
+    data.items.forEach((item, idx) => {
+      const tr = document.createElement('tr');
+      tr.style.cursor = 'pointer';
+      
+      const tdCheck = document.createElement('td');
+      tdCheck.style.textAlign = 'center';
+      tdCheck.style.verticalAlign = 'middle';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'local-picker-item-checkbox form-check-input';
+      checkbox.dataset.path = item.path;
+      checkbox.dataset.type = item.type;
+      checkbox.addEventListener('click', (e) => {
+        e.stopPropagation();
+        updateLocalPickerSelectionCount();
+      });
+      checkbox.addEventListener('change', () => {
+        updateLocalPickerSelectionCount();
+      });
+      tdCheck.appendChild(checkbox);
+      
+      const tdName = document.createElement('td');
+      tdName.className = 'text-truncate';
+      tdName.style.maxWidth = '480px';
+      tdName.style.verticalAlign = 'middle';
+      const icon = document.createElement('i');
+      if (item.type === 'folder') {
+        icon.className = 'fas fa-folder text-warning me-2';
+      } else {
+        const dummyItem = { type: 'file', format: getFileExtension(item.name) };
+        icon.className = getItemIcon(dummyItem) + ' ' + getIconColor(dummyItem) + ' me-2';
+      }
+      tdName.appendChild(icon);
+      
+      const nameText = document.createTextNode(item.name);
+      tdName.appendChild(nameText);
+      
+      // 双击文件夹进入，双击文件勾选
+      tr.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        if (item.type === 'folder') {
+          loadLocalPickerDirectory(item.path);
+        } else {
+          checkbox.checked = !checkbox.checked;
+          updateLocalPickerSelectionCount();
+        }
+      });
+      
+      // 单击行勾选/取消勾选
+      tr.addEventListener('click', () => {
+        checkbox.checked = !checkbox.checked;
+        updateLocalPickerSelectionCount();
+      });
+      
+      const tdType = document.createElement('td');
+      tdType.style.verticalAlign = 'middle';
+      tdType.textContent = item.type === 'folder' ? t('folders') : (item.type === 'file' ? t('filesUnit') : item.type);
+      
+      const tdSize = document.createElement('td');
+      tdSize.style.textAlign = 'right';
+      tdSize.style.paddingRight = '20px';
+      tdSize.style.verticalAlign = 'middle';
+      tdSize.textContent = item.size !== null && item.size !== undefined ? formatFileSize(item.size) : '-';
+      
+      tr.appendChild(tdCheck);
+      tr.appendChild(tdName);
+      tr.appendChild(tdType);
+      tr.appendChild(tdSize);
+      listEl.appendChild(tr);
+    });
+  } catch (err) {
+    if (listEl) {
+      listEl.innerHTML = `<tr><td colspan="4" class="text-center text-danger py-4"><i class="fas fa-exclamation-circle me-1"></i> 读取失败: ${escapeHtml(err.message)}</td></tr>`;
+    }
+    showToast('读取磁盘失败: ' + err.message, 'danger');
+  }
+}
+
+async function populateSidebarDrives() {
+  const sidebar = document.getElementById('localPickerSidebarDrives');
+  if (!sidebar) return;
+  try {
+    const response = await fetch(`${API_ROOT}/local/list?path=`);
+    if (!response.ok) return;
+    const data = await response.json();
+    sidebar.innerHTML = '';
+    data.items.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'sidebar-picker-item';
+      
+      const isPathActive = currentLocalPickerPath === item.path || currentLocalPickerPath.startsWith(item.path);
+      if (isPathActive) {
+        div.classList.add('active');
+      }
+      
+      div.innerHTML = `<i class="fas fa-hdd ${isPathActive ? 'text-primary' : 'text-secondary'}"></i><span>${item.name}</span>`;
+      div.addEventListener('click', (e) => {
+        e.stopPropagation();
+        loadLocalPickerDirectory(item.path);
+      });
+      sidebar.appendChild(div);
+    });
+  } catch (err) {
+    console.warn('Failed to load sidebar drives:', err);
+  }
+}
+
+function updateLocalPickerSelectionCount() {
+  const count = document.querySelectorAll('.local-picker-item-checkbox:checked').length;
+  const countEl = document.getElementById('localPickerSelectionCount');
+  if (countEl) {
+    countEl.textContent = t('localPickerSelectedCount', count);
+  }
+}
+
+async function handleLocalPickerConfirm() {
+  const checkboxes = document.querySelectorAll('.local-picker-item-checkbox:checked');
+  if (checkboxes.length === 0) {
+    showToast('请至少选择一个项目', 'warning');
+    return;
+  }
+  
+  const checkedPaths = Array.from(checkboxes).map(cb => cb.dataset.path);
+  
+  showToast(t('preparingImport'), 'info');
+  
+  try {
+    const response = await fetch(`${API_ROOT}/local/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        paths: checkedPaths,
+        base_path: currentLocalPickerPath
+      })
+    });
+    
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || '解析路径失败');
+    }
+    
+    const data = await response.json();
+    
+    const baseInput = document.getElementById('localImportBasePath');
+    if (baseInput && !baseInput.value.trim() && data.base_path) {
+      baseInput.value = data.base_path;
+    }
+    
+    registerFsEntries(data);
+    updateLocalImportSummary();
+    
+    if (localPickerModalInstance) {
+      localPickerModalInstance.hide();
+    }
+    
+    showToast(`✓ 已成功添加 ${data.folders.length + data.files.length} 个本地资源到导入列表中`, 'success');
+  } catch (err) {
+    console.error('解析本地资源失败:', err);
+    showToast('添加资源失败: ' + err.message, 'danger');
+  }
 }
