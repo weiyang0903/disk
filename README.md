@@ -8,7 +8,6 @@
 ![Flask](https://img.shields.io/badge/Flask-2.2.5-lightgrey?logo=flask&logoColor=white)
 ![SQLite](https://img.shields.io/badge/Database-SQLite-blue?logo=sqlite&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-informational?logo=windows&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-green)
 
 A local file catalog management system. It helps you record and organize files and folders scattered across your hard drives. You can browse, search, add, edit, delete, import, and export records — all through a clean web interface running entirely on your own computer.
 

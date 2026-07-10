@@ -8,7 +8,6 @@
 ![Flask](https://img.shields.io/badge/Flask-2.2.5-lightgrey?logo=flask&logoColor=white)
 ![SQLite](https://img.shields.io/badge/数据库-SQLite-blue?logo=sqlite&logoColor=white)
 ![Platform](https://img.shields.io/badge/平台-Windows%20%7C%20macOS-informational?logo=windows&logoColor=white)
-![License](https://img.shields.io/badge/许可证-MIT-green)
 
 一个本地文件目录管理系统，帮助你记录和整理分散在各个硬盘中的文件和文件夹。你可以通过一个简洁的网页界面进行浏览、搜索、添加、编辑、删除、导入和导出操作，整个系统完全运行在你自己的电脑上。
 
