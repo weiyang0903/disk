@@ -163,7 +163,7 @@ Disk-Manager/
 - 如果遇到数据库锁定错误（例如程序异常退出后），请在 `python/` 文件夹内运行 `python cleanup_db.py` 来清理残留的 SQLite WAL 文件。
 - 操作日志保存在 `system_log/` 文件夹中，仅供本地查阅，不会上传。
 - 后端服务器默认运行在 `5000` 端口，请确保该端口没有被其他程序占用。
-- 本项目使用 [Waitress](https://docs.pylonsproject.org/projects/waitress/) 作为生产环境 WSGI 服务器。若未安装 Waitress，将自动回退到 Flask 内置的开发服务器。
+- 本项目使用 `Waitress` 作为生产环境 WSGI 服务器。若未安装 Waitress，将自动回退到 Flask 内置的开发服务器。
 
 ---
 

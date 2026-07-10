@@ -163,7 +163,7 @@ Disk-Manager/
 - If you encounter a database lock error (e.g., after a crash), run `python cleanup_db.py` inside the `python/` folder to clean up leftover SQLite WAL files.
 - The system log files are saved in the `system_log/` folder. They are for local reference only and are never uploaded.
 - The backend server runs on port `5000` by default. Make sure no other application is using that port.
-- This project uses [Waitress](https://docs.pylonsproject.org/projects/waitress/) as the production WSGI server. If Waitress is not installed, it will fall back to the Flask built-in development server.
+- This project uses `Waitress` as the production WSGI server. If Waitress is not installed, it will fall back to the Flask built-in development server.
 
 ---
 
