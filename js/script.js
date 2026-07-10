@@ -9,6 +9,14 @@ const API_ROOT = 'http://127.0.0.1:5000/api';
 // ===================================
 let activeLang = localStorage.getItem('disk_lang') || 'zh-CN';
 
+// Patch window.fetch to automatically include language header
+const originalFetch = window.fetch;
+window.fetch = async function(resource, options = {}) {
+  options.headers = options.headers || {};
+  options.headers['X-Language'] = activeLang;
+  return originalFetch(resource, options);
+};
+
 function t(key, ...args) {
   if (typeof TRANSLATIONS === 'undefined') return key;
   const langDict = TRANSLATIONS[activeLang] || TRANSLATIONS['zh-CN'];
@@ -25,6 +33,9 @@ function setLanguage(lang) {
   if (typeof TRANSLATIONS === 'undefined' || !TRANSLATIONS[lang]) return;
   activeLang = lang;
   localStorage.setItem('disk_lang', lang);
+
+  // Notify backend of language change
+  fetch(`${API_ROOT}/set_lang?lang=${lang}`).catch(err => console.error("Failed to notify backend of language change:", err));
 
   // 1. 翻译静态 DOM 属性
   document.querySelectorAll('[data-i18n]').forEach(el => {
@@ -2404,12 +2415,12 @@ function handleExportClick(e) {
 
   if (scope === 'folder') {
     if (currentFolder) {
-      window.location.href = `${API_ROOT}/export?format=${format}&scope=folder&item_id=${currentFolder.id}`;
+      window.location.href = `${API_ROOT}/export?format=${format}&scope=folder&item_id=${currentFolder.id}&lang=${activeLang}`;
     } else {
-      window.location.href = `${API_ROOT}/export?format=${format}&scope=all`;
+      window.location.href = `${API_ROOT}/export?format=${format}&scope=all&lang=${activeLang}`;
     }
   } else {
-    window.location.href = `${API_ROOT}/export?format=${format}&scope=all`;
+    window.location.href = `${API_ROOT}/export?format=${format}&scope=all&lang=${activeLang}`;
   }
 }
 

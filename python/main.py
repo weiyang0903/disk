@@ -33,9 +33,51 @@ import os
 import re
 from datetime import datetime
 
+# ---- Logger Integration ----
+from logger import init_logger, log_operation, get_current_language, save_language, LANG_NAMES, print_db_message
+init_logger()
+
 app = Flask(__name__, static_folder='../', static_url_path='/')
 CORS(app)
 
+@app.before_request
+def before_request_sync_lang():
+    lang_header = request.headers.get('X-Language') or request.args.get('lang')
+    if lang_header:
+        save_language(lang_header)
+
+@app.after_request
+def after_request_log(response):
+    action_key = request.environ.get('action_key')
+    if action_key:
+        action_args = request.environ.get('action_args', {})
+        ip = request.remote_addr
+        method = request.method
+        route = request.path
+        status_code = response.status_code
+        
+        if status_code >= 400 and response.is_json:
+            try:
+                err_data = response.get_json()
+                if err_data and 'error' in err_data:
+                    action_args['error'] = err_data['error']
+                    action_key = f"{action_key}_error"
+            except Exception:
+                pass
+                
+        log_operation(ip, method, route, action_key, status_code, **action_args)
+    return response
+
+@app.route('/api/set_lang', methods=['GET'])
+def set_lang_endpoint():
+    lang = request.args.get('lang', '').strip()
+    if lang:
+        if save_language(lang):
+            lang_name = LANG_NAMES.get(lang, lang)
+            request.environ['action_key'] = 'set_lang'
+            request.environ['action_args'] = {'lang_name': lang_name}
+            return jsonify({"message": f"Language set to {lang}"}), 200
+    return jsonify({"error": "Invalid language"}), 400
 
 @app.route('/')
 def index():
@@ -73,24 +115,24 @@ def init_db():
             c.execute("SELECT file_size FROM items LIMIT 1")
         except sqlite3.OperationalError:
             c.execute("ALTER TABLE items ADD COLUMN file_size TEXT")
-            print("[OK] Added file_size column")
+            print_db_message('db_added_size_column')
         # Auto-add updated_at column to existing tables
         try:
             c.execute("SELECT updated_at FROM items LIMIT 1")
         except sqlite3.OperationalError:
             c.execute("ALTER TABLE items ADD COLUMN updated_at TEXT")
-            print("[OK] Added updated_at column")
+            print_db_message('db_added_updated_column')
         # ---- 性能索引 ----
         c.execute("CREATE INDEX IF NOT EXISTS idx_items_parent_id ON items(parent_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_items_type ON items(type)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_items_name ON items(name)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_items_format ON items(format)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_items_location ON items(location)")
-        print("[OK] 数据库索引已就绪")
+        print_db_message('db_index_ready')
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"数据库初始化错误: {e}")
+        print_db_message('db_init_error', error=str(e))
 
 init_db()
 
@@ -110,6 +152,8 @@ def get_logical_drives():
 @app.route('/api/local/list', methods=['GET'])
 def list_local_directory():
     path = request.args.get('path', '').strip()
+    request.environ['action_key'] = 'local_list'
+    request.environ['action_args'] = {'path': path}
     
     if not path:
         try:
@@ -161,6 +205,7 @@ def list_local_directory():
 
 @app.route('/api/local/resolve', methods=['POST'])
 def resolve_local_paths():
+    request.environ['action_key'] = 'local_resolve'
     data = request.json or {}
     paths = data.get('paths', [])
     base_path = data.get('base_path', '').strip()
@@ -244,6 +289,7 @@ def resolve_local_paths():
                     
     folders.sort(key=lambda x: x["depth"])
     
+    request.environ['action_args'] = {'folders_count': len(folders), 'files_count': len(files)}
     return jsonify({
         "base_path": base_path,
         "folders": folders,
@@ -275,12 +321,18 @@ def get_items():
         # —— parent_id 过滤 ——
         parent_id_raw = request.args.get('parent_id', '__all__')
         if parent_id_raw == '__all__':
+            request.environ['action_key'] = 'list_root'
+            request.environ['action_args'] = {}
             where_clause = ''
             where_params = []
         elif parent_id_raw in ('null', 'None', '', 'root'):
+            request.environ['action_key'] = 'list_root'
+            request.environ['action_args'] = {}
             where_clause = 'WHERE parent_id IS NULL'
             where_params = []
         else:
+            request.environ['action_key'] = 'list_folder'
+            request.environ['action_args'] = {'parent_id': parent_id_raw}
             try:
                 pid = int(parent_id_raw)
                 where_clause = 'WHERE parent_id = ?'
@@ -327,6 +379,8 @@ def get_items():
 # 获取所有文件夹（轻量，用于侧边栏树）
 @app.route('/api/folders', methods=['GET'])
 def get_folders():
+    request.environ['action_key'] = 'list_folders'
+    request.environ['action_args'] = {}
     conn = None
     try:
         conn = get_db_connection()
@@ -345,6 +399,8 @@ def get_folders():
 # 获取单个项目详情
 @app.route('/api/items/<int:item_id>', methods=['GET'])
 def get_item(item_id):
+    request.environ['action_key'] = 'get_item'
+    request.environ['action_args'] = {'item_id': item_id, 'name': ''}
     conn = None
     try:
         conn = get_db_connection()
@@ -352,6 +408,7 @@ def get_item(item_id):
         c.execute("SELECT id, name, description, location, format, type, parent_id, file_size FROM items WHERE id = ?", (item_id,))
         row = c.fetchone()
         if row:
+            request.environ['action_args']['name'] = row[1]
             data = {
                 "id": row[0], "name": row[1], "description": row[2],
                 "location": row[3], "format": row[4], "type": row[5],
@@ -386,6 +443,17 @@ def get_item(item_id):
 @app.route('/api/items', methods=['POST'])
 def add_item():
     data = request.get_json()
+    request.environ['action_key'] = 'add_item'
+    if isinstance(data, dict):
+        request.environ['action_args'] = {
+            'name': data.get('name', ''),
+            'type': data.get('type', ''),
+            'parent_id': data.get('parent_id') if data.get('parent_id') is not None else 'None',
+            'file_size': data.get('file_size') if data.get('file_size') is not None else '',
+            'location': data.get('location') if data.get('location') is not None else ''
+        }
+    else:
+        request.environ['action_args'] = {}
     if not data:
         return jsonify({"error": "Invalid JSON body"}), 400
     if not isinstance(data, dict):
@@ -443,6 +511,19 @@ def add_item():
 @app.route('/api/items/<int:item_id>', methods=['PUT'])
 def edit_item(item_id):
     data = request.get_json()
+    request.environ['action_key'] = 'edit_item'
+    if isinstance(data, dict):
+        request.environ['action_args'] = {
+            'item_id': item_id,
+            'name': data.get('name', ''),
+            'description': data.get('description', ''),
+            'location': data.get('location', ''),
+            'format_val': data.get('format', ''),
+            'parent_id': data.get('parent_id') if data.get('parent_id') is not None else 'None',
+            'file_size': data.get('file_size') if data.get('file_size') is not None else ''
+        }
+    else:
+        request.environ['action_args'] = {'item_id': item_id}
     if not data:
         return jsonify({"error": "Invalid JSON body"}), 400
     if not isinstance(data, dict):
@@ -475,6 +556,15 @@ def edit_item(item_id):
         format_value = data.get('format', existing[3])
         parent_id = data.get('parent_id') if 'parent_id' in data else existing[4]
         file_size = data.get('file_size') if 'file_size' in data else existing[5]
+        
+        request.environ['action_args'].update({
+            'name': name,
+            'description': description,
+            'location': location,
+            'format_val': format_value,
+            'parent_id': parent_id if parent_id is not None else 'None',
+            'file_size': file_size
+        })
         
         # 检查循环引用：不允许将项目移到自己的后代下
         if parent_id is not None and parent_id != existing[4]:
@@ -522,6 +612,8 @@ def get_all_descendants(item_id, conn):
 # 删除项目
 @app.route('/api/items/<int:item_id>', methods=['DELETE'])
 def delete_item(item_id):
+    request.environ['action_key'] = 'delete_item'
+    request.environ['action_args'] = {'item_id': item_id, 'deleted_count': 0}
     conn = None
     try:
         conn = get_db_connection()
@@ -541,6 +633,7 @@ def delete_item(item_id):
             c.execute(f"DELETE FROM items WHERE id IN ({placeholders})", all_ids)
         
         conn.commit()
+        request.environ['action_args']['deleted_count'] = len(all_ids)
         return jsonify({
             "message": "Item deleted successfully",
             "deleted_count": len(all_ids)
@@ -559,6 +652,8 @@ def delete_item(item_id):
 def search_items():
     query = request.args.get('q', '')
     fields_raw = request.args.get('fields', '')
+    request.environ['action_key'] = 'search'
+    request.environ['action_args'] = {'query': query, 'fields': fields_raw}
     
     # 解析前端勾选的筛选维度
     fields = [f.strip() for f in fields_raw.split(',') if f.strip()] if fields_raw else []
@@ -639,6 +734,8 @@ def search_items():
 # 统计信息
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
+    request.environ['action_key'] = 'stats'
+    request.environ['action_args'] = {}
     conn = None
     try:
         conn = get_db_connection()
@@ -747,6 +844,23 @@ def _build_export_response(items, format_type, filename_base):
 # 导出数据（支持 scope: all / folder / item，以及 POST 自选导出）
 @app.route('/api/export', methods=['GET', 'POST'])
 def export_data():
+    request.environ['action_key'] = 'export'
+    format_type = request.args.get('format', 'json')
+    scope = request.args.get('scope', 'all')
+    item_id = request.args.get('item_id', 'None')
+    if request.method == 'POST':
+        try:
+            data = request.get_json(silent=True) or {}
+            format_type = data.get('format', 'json')
+            scope = 'selected'
+            item_id = f"[{len(data.get('ids', []))} items]"
+        except Exception:
+            pass
+    request.environ['action_args'] = {
+        'format_type': format_type,
+        'scope': scope,
+        'item_id': item_id
+    }
     conn = None
     try:
         conn = get_db_connection()
@@ -840,6 +954,8 @@ def export_data():
 # 导入数据
 @app.route('/api/import', methods=['POST'])
 def import_data():
+    request.environ['action_key'] = 'import'
+    request.environ['action_args'] = {'imported': 0}
     data = request.get_json()
     
     if not isinstance(data, list):
@@ -920,6 +1036,7 @@ def import_data():
                     progressed = True
         
         conn.commit()
+        request.environ['action_args']['imported'] = inserted_count
         return jsonify({"message": "Import successful", "imported": inserted_count})
     except Exception as e:
         print(f"导入错误: {e}")
@@ -933,10 +1050,6 @@ def import_data():
 if __name__ == '__main__':
     try:
         from waitress import serve
-        print("="*52)
-        print(" 硬盘文件管理器 — Waitress 多线程服务")
-        print(" http://127.0.0.1:5000")
-        print("="*52)
         serve(app, host='127.0.0.1', port=5000, threads=8)
     except ImportError:
         print("⚠ waitress 未安装，回退到 Flask 开发服务器")
